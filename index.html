@@ -117,6 +117,48 @@
         </div>
       </div>
 
+      <!-- Wind & Weather Panel (data from Open-Meteo) -->
+      <div id="wind-panel">
+        <h3 class="chart-title">🌬️ Wind & Weather <small>(Open-Meteo)</small></h3>
+        <div id="wind-grid">
+          <div class="telem-item">
+            <span class="telem-label">Wind Speed</span>
+            <span class="telem-value" id="wind-speed">-- km/h</span>
+          </div>
+          <div class="telem-item">
+            <span class="telem-label">Wind Dir</span>
+            <span class="telem-value" id="wind-direction">--</span>
+          </div>
+          <div class="telem-item">
+            <span class="telem-label">Temp</span>
+            <span class="telem-value" id="wind-temp">-- °C</span>
+          </div>
+          <div class="telem-item">
+            <span class="telem-label">Wind Effect</span>
+            <span class="telem-value" id="wind-effect">--</span>
+          </div>
+        </div>
+        <div id="wind-visual">
+          <div id="wind-arrow-box">
+            <div id="wind-arrow">➤</div>
+          </div>
+          <span id="wind-desc">Click "Refresh" to load weather</span>
+        </div>
+        <button id="btn-refresh-weather" onclick="fetchWeatherData()">🔄 Refresh Weather</button>
+      </div>
+
+      <!-- No-Fly Zones Panel -->
+      <div id="nfz-panel">
+        <h3 class="chart-title">🚫 No-Fly Zones</h3>
+        <div id="nfz-status">Zones loaded on map</div>
+        <div id="nfz-legend">
+          <span class="nfz-legend-item"><span class="nfz-dot red"></span> Restricted (No Fly)</span>
+          <span class="nfz-legend-item"><span class="nfz-dot yellow"></span> Caution Zone</span>
+          <span class="nfz-legend-item"><span class="nfz-dot green"></span> Path Safe</span>
+        </div>
+        <div id="nfz-warning" class="hidden">⚠️ FLIGHT PATH ENTERS A NO-FLY ZONE!</div>
+      </div>
+
       <!-- Alert banner (hidden by default) -->
       <div id="alert-banner" class="hidden"></div>
 

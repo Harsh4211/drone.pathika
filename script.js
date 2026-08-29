@@ -1190,3 +1190,428 @@ window.addEventListener('resize', function () {
   // Invalidate the Leaflet map size after layout change
   setTimeout(function () { map.invalidateSize(); }, 200);
 });
+
+
+// ─────────────────────────────────────────────
+// MODULE H — NO-FLY ZONES
+// ─────────────────────────────────────────────
+// Hardcoded restricted zones near the default map center (Ahmedabad, India).
+// In a production app these would come from the DigitalSky or Watchtower API.
+
+/** DOM references for NFZ panel */
+var nfzWarningEl = document.getElementById('nfz-warning');
+var nfzStatusEl  = document.getElementById('nfz-status');
+
+/**
+ * No-fly zone definitions.
+ * Each zone has: name, lat, lng, radiusMeters, type ('restricted' or 'caution').
+ *
+ * Sources:
+ *   - DGCA rules: 5 km exclusion around airports
+ *   - Government buildings / sensitive areas: ~2 km exclusion
+ *   - Military installations
+ */
+var NO_FLY_ZONES = [
+  {
+    name: 'SVPI Airport (Ahmedabad)',
+    lat: 23.0722, lng: 72.6347,
+    radiusMeters: 5000,
+    type: 'restricted'
+  },
+  {
+    name: 'Gandhinagar Secretariat',
+    lat: 23.2224, lng: 72.6496,
+    radiusMeters: 2000,
+    type: 'restricted'
+  },
+  {
+    name: 'Raj Bhavan (Governor House)',
+    lat: 23.2360, lng: 72.6480,
+    radiusMeters: 1500,
+    type: 'restricted'
+  },
+  {
+    name: 'Sabarmati Ashram Heritage Zone',
+    lat: 23.0607, lng: 72.5809,
+    radiusMeters: 1000,
+    type: 'caution'
+  },
+  {
+    name: 'Adalaj Stepwell Heritage Zone',
+    lat: 23.1645, lng: 72.5822,
+    radiusMeters: 800,
+    type: 'caution'
+  },
+  {
+    name: 'Gujarat University Campus',
+    lat: 23.0339, lng: 72.5458,
+    radiusMeters: 1200,
+    type: 'caution'
+  }
+];
+
+/** Leaflet circle objects drawn on the map for each NFZ */
+var nfzCircles = [];
+
+/**
+ * Draws all no-fly zones on the map as colored circles.
+ * Restricted = red, Caution = yellow/orange.
+ */
+function drawNoFlyZones() {
+  NO_FLY_ZONES.forEach(function (zone) {
+    var color = zone.type === 'restricted' ? '#f85149' : '#d29922';
+    var fillOpacity = zone.type === 'restricted' ? 0.15 : 0.10;
+
+    var circle = L.circle([zone.lat, zone.lng], {
+      radius: zone.radiusMeters,
+      color: color,
+      fillColor: color,
+      fillOpacity: fillOpacity,
+      weight: 2,
+      dashArray: zone.type === 'caution' ? '6, 4' : '',
+      interactive: true
+    }).addTo(map);
+
+    // Tooltip shows zone name on hover
+    circle.bindTooltip(
+      '<strong>' + (zone.type === 'restricted' ? '🚫' : '⚠️') + ' ' + zone.name + '</strong><br>' +
+      'Radius: ' + (zone.radiusMeters / 1000).toFixed(1) + ' km<br>' +
+      'Type: ' + zone.type.charAt(0).toUpperCase() + zone.type.slice(1),
+      { className: '', direction: 'top' }
+    );
+
+    nfzCircles.push(circle);
+  });
+
+  nfzStatusEl.textContent = NO_FLY_ZONES.length + ' zones loaded on map';
+}
+
+/**
+ * Checks whether the current flight path intersects any no-fly zone.
+ * Uses a simple point-in-circle test: for each waypoint AND for several
+ * interpolated points along each segment, check if the point is within
+ * any NFZ radius.
+ *
+ * @returns {object|null} The first intersecting zone, or null if path is safe.
+ */
+function checkPathIntersectsNFZ() {
+  var wps = missionState.waypoints;
+  if (wps.length < 2) return null;
+
+  // Generate test points: all waypoints + interpolated midpoints
+  var testPoints = [];
+  for (var i = 0; i < wps.length; i++) {
+    testPoints.push(wps[i]);
+    // Add interpolated points between consecutive waypoints
+    if (i < wps.length - 1) {
+      for (var t = 0.25; t < 1; t += 0.25) {
+        testPoints.push({
+          lat: wps[i].lat + (wps[i + 1].lat - wps[i].lat) * t,
+          lng: wps[i].lng + (wps[i + 1].lng - wps[i].lng) * t
+        });
+      }
+    }
+  }
+
+  // Check each test point against each NFZ
+  for (var p = 0; p < testPoints.length; p++) {
+    var pt = testPoints[p];
+    for (var z = 0; z < NO_FLY_ZONES.length; z++) {
+      var zone = NO_FLY_ZONES[z];
+      var distKm = haversineDistanceKm(pt.lat, pt.lng, zone.lat, zone.lng);
+      var radiusKm = zone.radiusMeters / 1000;
+      if (distKm <= radiusKm) {
+        return zone; // Found an intersection
+      }
+    }
+  }
+
+  return null; // Path is safe
+}
+
+/**
+ * Updates the NFZ warning display and path color.
+ * Called whenever waypoints change.
+ */
+function updateNFZCheck() {
+  var violation = checkPathIntersectsNFZ();
+  if (violation) {
+    nfzWarningEl.textContent = '⚠️ PATH ENTERS: ' + violation.name + ' (' + violation.type + ')';
+    nfzWarningEl.classList.remove('hidden');
+    // Turn the path line red
+    flightPathLine.setStyle({ color: '#f85149' });
+  } else {
+    nfzWarningEl.classList.add('hidden');
+    // Restore normal path color
+    flightPathLine.setStyle({ color: '#58a6ff' });
+  }
+}
+
+// Draw zones on page load
+drawNoFlyZones();
+
+// --- Patch addWaypoint and undoLastWaypoint to trigger NFZ check ---
+// We wrap the existing recalculateStats to also run the NFZ check.
+var _originalRecalculateStats = recalculateStats;
+recalculateStats = function () {
+  _originalRecalculateStats();
+  updateNFZCheck();
+};
+
+
+// ─────────────────────────────────────────────
+// MODULE I — WIND & WEATHER (Open-Meteo API)
+// ─────────────────────────────────────────────
+// Fetches real-time wind speed, wind direction, and temperature
+// from the Open-Meteo API (free, no API key required).
+// Wind friction is applied to the simulation engine.
+
+/** DOM references for wind panel */
+var windSpeedEl     = document.getElementById('wind-speed');
+var windDirectionEl = document.getElementById('wind-direction');
+var windTempEl      = document.getElementById('wind-temp');
+var windEffectEl    = document.getElementById('wind-effect');
+var windArrowEl     = document.getElementById('wind-arrow');
+var windDescEl      = document.getElementById('wind-desc');
+
+/**
+ * Current wind data (updated by fetchWeatherData).
+ * windSpeedKmh: wind speed in km/h
+ * windDirectionDeg: meteorological wind direction in degrees (where wind comes FROM)
+ */
+var currentWind = {
+  windSpeedKmh: 0,
+  windSpeedMs: 0,
+  windDirectionDeg: 0,
+  temperature: null,
+  loaded: false
+};
+
+/**
+ * Converts a wind direction in degrees to a compass label.
+ * @param {number} deg — Wind direction in degrees (0 = North)
+ * @returns {string} Compass direction (e.g., "NNE", "SW")
+ */
+function degToCompass(deg) {
+  var dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+              'S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  var idx = Math.round(deg / 22.5) % 16;
+  return dirs[idx];
+}
+
+/**
+ * Fetches current weather data from Open-Meteo for the map center.
+ * URL format: https://api.open-meteo.com/v1/forecast?latitude=X&longitude=Y&current=wind_speed_10m,wind_direction_10m,temperature_2m
+ *
+ * This is called:
+ *  - When the user clicks "Refresh Weather"
+ *  - Automatically when the page loads
+ *  - When simulation starts
+ */
+function fetchWeatherData() {
+  // Use the map center as the location for weather data
+  var center = map.getCenter();
+  var lat = center.lat.toFixed(4);
+  var lng = center.lng.toFixed(4);
+
+  var url = 'https://api.open-meteo.com/v1/forecast'
+    + '?latitude=' + lat
+    + '&longitude=' + lng
+    + '&current=wind_speed_10m,wind_direction_10m,temperature_2m,weather_code';
+
+  windDescEl.textContent = 'Fetching weather data...';
+
+  fetch(url)
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      if (data.current) {
+        var ws = data.current.wind_speed_10m;    // km/h
+        var wd = data.current.wind_direction_10m; // degrees
+        var temp = data.current.temperature_2m;   // °C
+
+        currentWind.windSpeedKmh = ws;
+        currentWind.windSpeedMs = ws / 3.6;
+        currentWind.windDirectionDeg = wd;
+        currentWind.temperature = temp;
+        currentWind.loaded = true;
+
+        // Update UI
+        windSpeedEl.textContent = ws.toFixed(1) + ' km/h';
+        windDirectionEl.textContent = degToCompass(wd) + ' (' + wd + '°)';
+        windTempEl.textContent = temp.toFixed(1) + ' °C';
+
+        // Rotate the wind arrow to show wind direction
+        // Meteorological convention: wind direction is where wind comes FROM
+        // Arrow should point in the direction wind is blowing TO
+        windArrowEl.style.transform = 'rotate(' + (wd + 180) + 'deg)';
+
+        // Describe wind effect
+        var effectDesc;
+        if (ws < 5) {
+          effectDesc = 'Calm — negligible effect';
+          windEffectEl.style.color = '#2ea043';
+        } else if (ws < 15) {
+          effectDesc = 'Light breeze — minor drag';
+          windEffectEl.style.color = '#58a6ff';
+        } else if (ws < 30) {
+          effectDesc = 'Moderate wind — noticeable drag';
+          windEffectEl.style.color = '#d29922';
+        } else {
+          effectDesc = 'Strong wind — significant drag!';
+          windEffectEl.style.color = '#f85149';
+        }
+        windEffectEl.textContent = effectDesc.split('—')[0].trim();
+        windDescEl.textContent = effectDesc + ' | Wind from ' + degToCompass(wd);
+      }
+    })
+    .catch(function (err) {
+      console.error('Weather fetch failed:', err);
+      windDescEl.textContent = 'Failed to load weather data';
+    });
+}
+
+/**
+ * Computes the wind effect on the drone's effective ground speed.
+ *
+ * Formula: effectiveSpeed = droneAirSpeed - windSpeed × cos(angleBetween)
+ *
+ * Where angleBetween is the angle between the drone's heading and the
+ * direction the wind is coming FROM.
+ *   - cos = 1  → pure headwind → maximum slowdown
+ *   - cos = -1 → pure tailwind → speed boost
+ *   - cos = 0  → crosswind → no speed change (only lateral drift)
+ *
+ * @param {number} droneHeadingDeg — Drone's heading (0–360, 0=North)
+ * @param {number} droneSpeedMs — Drone's air speed in m/s
+ * @returns {object} { effectiveSpeedMs, windComponentMs, isHeadwind }
+ */
+function computeWindEffect(droneHeadingDeg, droneSpeedMs) {
+  if (!currentWind.loaded || currentWind.windSpeedMs < 0.1) {
+    return { effectiveSpeedMs: droneSpeedMs, windComponentMs: 0, isHeadwind: false };
+  }
+
+  // Angle between drone heading and wind source direction
+  var angleBetween = toRadians(currentWind.windDirectionDeg - droneHeadingDeg);
+
+  // Component of wind speed along the drone's heading
+  // Positive = headwind (slows drone), Negative = tailwind (speeds drone)
+  var windComponent = currentWind.windSpeedMs * Math.cos(angleBetween);
+
+  var effectiveSpeed = droneSpeedMs - windComponent;
+
+  // Clamp to a minimum speed (drone doesn't fly backwards in heavy headwind)
+  effectiveSpeed = Math.max(effectiveSpeed, droneSpeedMs * 0.2);
+
+  return {
+    effectiveSpeedMs: effectiveSpeed,
+    windComponentMs: windComponent,
+    isHeadwind: windComponent > 0
+  };
+}
+
+// --- Patch simulation tick to apply wind friction ---
+// We replace the original simulationTick with an enhanced version
+// that factors in wind speed and direction.
+
+// Save reference to original tick
+var _origSimulationTick = simulationTick;
+
+// Override simulationTick with wind-aware version
+simulationTick = function () {
+  if (missionState.isPaused) return;
+
+  var wps = missionState.waypoints;
+  var segIdx = missionState.currentSegmentIndex;
+
+  if (segIdx >= segmentDistances.length) {
+    missionComplete();
+    return;
+  }
+
+  // --- Advance position (with wind effect) ---
+  var tickDurationSec = TICK_INTERVAL_MS / 1000;
+
+  // Compute heading for wind calculation
+  var wpA = wps[segIdx];
+  var wpB = wps[segIdx + 1];
+  var heading = computeBearing(wpA.lat, wpA.lng, wpB.lat, wpB.lng);
+
+  // Apply wind friction to get effective ground speed
+  var windResult = computeWindEffect(heading, ASSUMED_SPEED_MS * SIMULATION_SPEED_MULTIPLIER);
+  var effectiveSpeedMs = windResult.effectiveSpeedMs;
+
+  // Convert to km covered this tick
+  var distThisTickKm = (effectiveSpeedMs / 1000) * tickDurationSec;
+
+  var currentSegLen = segmentDistances[segIdx];
+  var progressIncrement = currentSegLen > 0 ? distThisTickKm / currentSegLen : 1;
+
+  missionState.segmentProgress += progressIncrement;
+  missionState.distanceCoveredKm += distThisTickKm;
+  missionState.elapsedSeconds += tickDurationSec;
+
+  // Check if we've finished the current segment
+  if (missionState.segmentProgress >= 1) {
+    var overshoot = missionState.segmentProgress - 1;
+    markWaypointsReached(segIdx + 1);
+    missionState.currentSegmentIndex++;
+
+    if (missionState.currentSegmentIndex >= segmentDistances.length) {
+      var lastWp = wps[wps.length - 1];
+      droneMarker.setLatLng([lastWp.lat, lastWp.lng]);
+      missionComplete();
+      return;
+    }
+
+    missionState.segmentProgress = 0;
+    var nextSegLen = segmentDistances[missionState.currentSegmentIndex];
+    if (nextSegLen > 0) {
+      missionState.segmentProgress = (overshoot * currentSegLen) / nextSegLen;
+    }
+  }
+
+  // --- Compute interpolated position ---
+  var newSegIdx = missionState.currentSegmentIndex;
+  wpA = wps[newSegIdx];
+  wpB = wps[newSegIdx + 1];
+  var t = missionState.segmentProgress;
+
+  var currentLat = wpA.lat + (wpB.lat - wpA.lat) * t;
+  var currentLng = wpA.lng + (wpB.lng - wpA.lng) * t;
+
+  droneMarker.setLatLng([currentLat, currentLng]);
+
+  // --- Compute telemetry ---
+  // Battery drains faster in headwind (more energy to maintain speed)
+  var batteryMultiplier = windResult.isHeadwind ? (1 + windResult.windComponentMs / ASSUMED_SPEED_MS * 0.3) : 1;
+  var battery = Math.max(0, 100 - (missionState.distanceCoveredKm * BATTERY_PER_KM * batteryMultiplier));
+  var altitude = ALTITUDE_BASELINE + (Math.random() * 2 - 1) * ALTITUDE_JITTER;
+
+  // Actual ground speed (what an observer on the ground sees)
+  var displaySpeedMs = effectiveSpeedMs / SIMULATION_SPEED_MULTIPLIER; // normalize for display
+  var speed = displaySpeedMs + (Math.random() * 2 - 1) * 0.5;
+  heading = computeBearing(currentLat, currentLng, wpB.lat, wpB.lng);
+
+  missionState.currentHeading = heading;
+  rotateDroneIcon(heading);
+
+  var telemetry = {
+    altitude: altitude,
+    speed: Math.max(0, speed),
+    batteryPercent: battery,
+    lat: currentLat,
+    lng: currentLng,
+    headingDegrees: heading
+  };
+
+  updateTelemetryDisplay(telemetry);
+  updateCharts(missionState.elapsedSeconds, battery, telemetry.speed);
+
+  // --- Check alerts ---
+  if (battery <= 20) {
+    showAlert('⚠️ LOW BATTERY WARNING — ' + battery.toFixed(1) + '%', 'warning');
+  }
+};
+
+// Fetch weather data on page load
+fetchWeatherData();
