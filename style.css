@@ -1,0 +1,715 @@
+/* ===================================================
+   STYLE.CSS — Dark "Mission Control" Theme for Drone Pathika
+   Responsive: Desktop / Tablet / Mobile
+   =================================================== */
+
+/* ---------- RESET & BASE ---------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ---------- HEADER ---------- */
+#header {
+  background: linear-gradient(135deg, #161b22, #1c2333);
+  border-bottom: 2px solid #00e676;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.header-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #00e676;
+  letter-spacing: 1px;
+}
+
+.header-icon {
+  font-size: 1.6rem;
+  margin-right: 6px;
+}
+
+.header-subtitle {
+  font-size: 0.85rem;
+  color: #8b949e;
+}
+
+/* ---------- DEVICE BADGE ---------- */
+#device-badge {
+  font-size: 0.65rem;
+  color: #8b949e;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 2px 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  display: inline-block;
+  margin-top: 2px;
+}
+
+/* ---------- MODE TOGGLE (Simulator / Live) ---------- */
+#mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 8px 16px;
+}
+
+.mode-label {
+  font-size: 0.85rem;
+  color: #8b949e;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  transition: color 0.3s;
+}
+
+.mode-label.active {
+  color: #00e676;
+}
+
+/* Toggle switch (the slider) */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 24px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: #21262d;
+  border-radius: 24px;
+  border: 1px solid #30363d;
+  transition: background 0.3s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background: #00e676;
+  border-radius: 50%;
+  transition: transform 0.3s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: #1a3a2a;
+  border-color: #00e676;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(24px);
+  background: #f85149;
+}
+
+/* ---------- LIVE STATUS BANNER ---------- */
+#live-status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid #f85149;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  color: #f85149;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 1px;
+}
+
+#live-status-banner.hidden {
+  display: none;
+}
+
+.live-dot {
+  width: 10px;
+  height: 10px;
+  background: #f85149;
+  border-radius: 50%;
+  animation: pulse-dot 1.2s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.7); }
+}
+
+/* ---------- MAIN LAYOUT (Desktop default) ---------- */
+#main-container {
+  display: flex;
+  height: calc(100vh - 56px);
+}
+
+#map-section {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+#dashboard-section {
+  flex: 1;
+  min-width: 320px;
+  max-width: 420px;
+  background: #161b22;
+  border-left: 2px solid #30363d;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+/* ---------- COLLAPSIBLE DASHBOARD TOGGLE (hidden on desktop) ---------- */
+#dashboard-toggle {
+  display: none; /* shown only on tablet/mobile via media queries */
+  width: 100%;
+  padding: 10px;
+  background: #161b22;
+  border: none;
+  border-top: 2px solid #30363d;
+  color: #00e676;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+#dashboard-toggle:hover {
+  background: #21262d;
+}
+
+#dashboard-toggle .toggle-arrow {
+  display: inline-block;
+  transition: transform 0.3s;
+  margin-right: 6px;
+}
+
+#dashboard-toggle .toggle-arrow.collapsed {
+  transform: rotate(180deg);
+}
+
+/* ---------- CONTROL BUTTONS ---------- */
+#controls-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #161b22;
+  flex-wrap: wrap;
+}
+
+#controls-bar button {
+  padding: 8px 16px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #21262d;
+  color: #c9d1d9;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+#controls-bar button:hover:not(:disabled) {
+  background: #30363d;
+  border-color: #58a6ff;
+}
+
+#controls-bar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#btn-start {
+  background: #238636 !important;
+  border-color: #2ea043 !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+#btn-start:hover:not(:disabled) {
+  background: #2ea043 !important;
+}
+
+#btn-clear {
+  border-color: #f85149 !important;
+  color: #f85149 !important;
+}
+
+#btn-clear:hover:not(:disabled) {
+  background: #3d1a1a !important;
+}
+
+/* ---------- MAP ---------- */
+#map {
+  flex: 1;
+  min-height: 300px;
+  z-index: 1;
+}
+
+/* Custom numbered waypoint markers */
+.waypoint-icon {
+  background: #58a6ff;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+}
+
+.waypoint-icon.reached {
+  background: #2ea043;
+  border-color: #00e676;
+}
+
+/* Drone SVG icon on map — container for rotation */
+.drone-icon {
+  transition: transform 0.15s linear;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));
+  line-height: 1;
+}
+
+/* Live position marker (user's GPS dot) */
+.live-position-icon {
+  width: 16px;
+  height: 16px;
+  background: #f85149;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgba(248, 81, 73, 0.6);
+  animation: pulse-dot 1.5s infinite;
+}
+
+/* ---------- STATS PANEL ---------- */
+#stats-panel {
+  display: flex;
+  gap: 16px;
+  padding: 12px 16px;
+  background: #161b22;
+  border-top: 1px solid #30363d;
+  flex-wrap: wrap;
+}
+
+.stat-item {
+  flex: 1;
+  min-width: 120px;
+  text-align: center;
+}
+
+.stat-label {
+  display: block;
+  font-size: 0.75rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  display: block;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #58a6ff;
+}
+
+/* ---------- TELEMETRY DASHBOARD ---------- */
+.dashboard-heading {
+  text-align: center;
+  color: #00e676;
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #30363d;
+}
+
+#telemetry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.telem-item {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+
+.telem-label {
+  display: block;
+  font-size: 0.7rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+
+.telem-value {
+  display: block;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #e6edf3;
+}
+
+/* ---------- ALERT BANNER ---------- */
+#alert-banner {
+  padding: 10px 14px;
+  border-radius: 6px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-bottom: 12px;
+  transition: opacity 0.3s;
+}
+
+#alert-banner.hidden {
+  display: none;
+}
+
+#alert-banner.warning {
+  background: #f8514922;
+  border: 1px solid #f85149;
+  color: #f85149;
+  animation: pulse-warning 1s infinite;
+}
+
+#alert-banner.info {
+  background: #238636;
+  border: 1px solid #2ea043;
+  color: #fff;
+}
+
+@keyframes pulse-warning {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ---------- CHARTS ---------- */
+.chart-container {
+  margin-bottom: 16px;
+}
+
+.chart-title {
+  font-size: 0.8rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.chart-container canvas {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 8px;
+  width: 100% !important;
+}
+
+/* ---------- MODAL ---------- */
+#modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 16px;
+}
+
+#modal-overlay.hidden {
+  display: none;
+}
+
+#modal-box {
+  background: #161b22;
+  border: 2px solid #00e676;
+  border-radius: 12px;
+  padding: 32px 48px;
+  text-align: center;
+  max-width: 400px;
+  width: 100%;
+}
+
+#modal-box h2 {
+  color: #00e676;
+  font-size: 1.6rem;
+  margin-bottom: 12px;
+}
+
+#modal-box p {
+  color: #c9d1d9;
+  margin-bottom: 20px;
+}
+
+#modal-box small {
+  color: #8b949e;
+}
+
+#btn-modal-close {
+  padding: 10px 32px;
+  background: #238636;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#btn-modal-close:hover {
+  background: #2ea043;
+}
+
+
+/* ==========================================================
+   RESPONSIVE BREAKPOINTS
+   ========================================================== */
+
+/* ---------- TABLET (481px – 960px) ---------- */
+@media (max-width: 960px) {
+  #main-container {
+    flex-direction: column;
+    height: auto;
+  }
+
+  #map-section {
+    height: 55vh;
+    min-height: 350px;
+  }
+
+  #dashboard-section {
+    max-width: 100%;
+    min-width: unset;
+    border-left: none;
+    border-top: none;
+  }
+
+  #dashboard-toggle {
+    display: block;
+  }
+
+  /* On tablet, slightly larger touch targets */
+  #controls-bar button {
+    padding: 10px 18px;
+    font-size: 0.9rem;
+  }
+
+  .waypoint-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  #header {
+    padding: 10px 16px;
+  }
+
+  .header-title {
+    font-size: 1.2rem;
+  }
+
+  /* Telemetry grid stays 2 columns on tablet */
+  #telemetry-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  #stats-panel {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .stat-item {
+    min-width: 90px;
+  }
+}
+
+/* ---------- MOBILE (480px and below) ---------- */
+@media (max-width: 480px) {
+  #header {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px 12px;
+    gap: 6px;
+  }
+
+  .header-left {
+    align-items: center;
+    text-align: center;
+  }
+
+  .header-title {
+    font-size: 1.1rem;
+  }
+
+  .header-subtitle {
+    font-size: 0.75rem;
+    text-align: center;
+  }
+
+  #mode-toggle {
+    justify-content: center;
+    padding: 6px 12px;
+  }
+
+  .mode-label {
+    font-size: 0.8rem;
+  }
+
+  #main-container {
+    flex-direction: column;
+    height: auto;
+  }
+
+  #map-section {
+    height: 45vh;
+    min-height: 280px;
+  }
+
+  /* Controls: smaller padding, wrap nicely */
+  #controls-bar {
+    padding: 8px 10px;
+    gap: 6px;
+    justify-content: center;
+  }
+
+  #controls-bar button {
+    padding: 10px 12px;
+    font-size: 0.8rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: center;
+  }
+
+  #dashboard-section {
+    max-width: 100%;
+    min-width: unset;
+    border-left: none;
+    padding: 12px;
+  }
+
+  #dashboard-toggle {
+    display: block;
+  }
+
+  /* Telemetry grid: 3 columns on mobile for compact view */
+  #telemetry-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+  }
+
+  .telem-item {
+    padding: 8px 4px;
+  }
+
+  .telem-label {
+    font-size: 0.6rem;
+  }
+
+  .telem-value {
+    font-size: 0.95rem;
+  }
+
+  /* Stats panel: row on mobile */
+  #stats-panel {
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .stat-item {
+    min-width: 80px;
+  }
+
+  .stat-label {
+    font-size: 0.65rem;
+  }
+
+  .stat-value {
+    font-size: 1rem;
+  }
+
+  /* Charts: less padding */
+  .chart-container canvas {
+    padding: 4px;
+  }
+
+  /* Modal: full width on mobile */
+  #modal-box {
+    padding: 24px 20px;
+    margin: 12px;
+  }
+
+  #modal-box h2 {
+    font-size: 1.3rem;
+  }
+
+  /* Larger waypoint markers for touch */
+  .waypoint-icon {
+    width: 34px;
+    height: 34px;
+    font-size: 15px;
+    border-width: 3px;
+  }
+}
+
+/* ---------- LARGE DESKTOP (1400px+) ---------- */
+@media (min-width: 1400px) {
+  #dashboard-section {
+    max-width: 480px;
+  }
+
+  .telem-value {
+    font-size: 1.3rem;
+  }
+
+  .stat-value {
+    font-size: 1.35rem;
+  }
+}

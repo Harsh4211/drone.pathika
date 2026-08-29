@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drone Pathika</title>
+
+  <!-- Leaflet CSS (map library) -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+
+  <!-- Our custom styles -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===== HEADER BAR ===== -->
+  <header id="header">
+    <div class="header-left">
+      <div class="header-title">
+        <span class="header-icon">&#9992;</span>
+        Drone Pathika
+      </div>
+      <div class="header-subtitle">Click on the map to plan waypoints, then simulate the flight</div>
+      <span id="device-badge">detecting...</span>
+    </div>
+
+    <!-- Mode Toggle: Simulator / Live -->
+    <div id="mode-toggle">
+      <span class="mode-label active" id="mode-label-sim">Simulator</span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="mode-switch" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="mode-label" id="mode-label-live">&#128225; Live</span>
+    </div>
+  </header>
+
+  <!-- ===== MAIN CONTENT AREA ===== -->
+  <div id="main-container">
+
+    <!-- ---- LEFT: Map + Controls ---- -->
+    <div id="map-section">
+
+      <!-- Control buttons above the map -->
+      <div id="controls-bar">
+        <button id="btn-undo" title="Remove the last waypoint">&#x21A9; Undo Last Point</button>
+        <button id="btn-clear" title="Clear all waypoints and reset">&#x1F5D1; Clear All</button>
+        <button id="btn-start" disabled title="Need at least 2 waypoints">&#9654; Start Simulation</button>
+        <button id="btn-pause" disabled title="Pause or resume the simulation">&#10074;&#10074; Pause</button>
+        <button id="btn-reset" disabled title="Stop simulation and reset">&#x21BB; Reset</button>
+      </div>
+
+      <!-- The Leaflet map renders here -->
+      <div id="map"></div>
+
+      <!-- Path stats panel below the map -->
+      <div id="stats-panel">
+        <div class="stat-item">
+          <span class="stat-label">Total Distance</span>
+          <span class="stat-value" id="stat-distance">0.00 km</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Est. Flight Time</span>
+          <span class="stat-value" id="stat-time">0m 0s</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Est. Battery Use</span>
+          <span class="stat-value" id="stat-battery">0 %</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dashboard collapse toggle (visible on tablet/mobile) -->
+    <button id="dashboard-toggle" onclick="toggleDashboard()">
+      <span class="toggle-arrow" id="dash-arrow">▲</span> TELEMETRY DASHBOARD
+    </button>
+
+    <!-- ---- RIGHT: Telemetry Dashboard ---- -->
+    <div id="dashboard-section">
+
+      <h2 class="dashboard-heading">Live Telemetry</h2>
+
+      <!-- Live mode status banner (hidden by default) -->
+      <div id="live-status-banner" class="hidden">
+        <span class="live-dot"></span> LIVE TRACKING ACTIVE
+      </div>
+
+      <!-- Numeric readouts -->
+      <div id="telemetry-grid">
+        <div class="telem-item">
+          <span class="telem-label">Altitude</span>
+          <span class="telem-value" id="telem-altitude">-- m</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Speed</span>
+          <span class="telem-value" id="telem-speed">-- m/s</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Battery</span>
+          <span class="telem-value" id="telem-battery">-- %</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Latitude</span>
+          <span class="telem-value" id="telem-lat">--</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Longitude</span>
+          <span class="telem-value" id="telem-lng">--</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Heading</span>
+          <span class="telem-value" id="telem-heading">-- °</span>
+        </div>
+      </div>
+
+      <!-- Alert banner (hidden by default) -->
+      <div id="alert-banner" class="hidden"></div>
+
+      <!-- Charts -->
+      <div class="chart-container">
+        <h3 class="chart-title">Battery % over Time</h3>
+        <canvas id="chart-battery"></canvas>
+      </div>
+
+      <div class="chart-container">
+        <h3 class="chart-title">Speed over Time</h3>
+        <canvas id="chart-speed"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MISSION COMPLETE MODAL ===== -->
+  <div id="modal-overlay" class="hidden">
+    <div id="modal-box">
+      <h2>&#10003; Mission Complete</h2>
+      <p>The drone has reached its final waypoint.<br />
+        <small>Add more waypoints and click Start to continue the mission.</small>
+      </p>
+      <button id="btn-modal-close">OK</button>
+    </div>
+  </div>
+
+  <!-- ===== SCRIPTS ===== -->
+  <!-- Leaflet JS (map library) -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin=""
+  ></script>
+
+  <!-- Chart.js (charting library) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+  <!-- Our application code -->
+  <script src="script.js"></script>
+</body>
+</html>
