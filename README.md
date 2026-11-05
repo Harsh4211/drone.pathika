@@ -214,6 +214,7 @@ drone.pathika/
 | **🗑 Clear All** | Clears the flight route, removes markers, and resets telemetry. |
 | **▶ Start** | Initiates (or resumes) the flight simulation along planned waypoints. |
 | **⏸ Pause / Resume** | Pauses or resumes simulation in mid-air. |
+| **🏠 RTL** | Commands Return-to-Launch mode (halts forward route traversal, computes direct return vector to WP 1 / Home from exact coordinates, applies wind dynamics and battery drain, descends, and touches down). |
 | **↻ Reset** | Resets drone to launch position while preserving waypoints. |
 | **📥 Export Plan** | Downloads current waypoints as a `.json` mission file. |
 | **📁 Import Plan** | Loads and renders a `.json` waypoint mission file. |
@@ -221,7 +222,6 @@ drone.pathika/
 | **📡 SITL / Drone Link** | Connects to `bridge.py` for live MAVLink telemetry streaming. |
 | **⬆ Upload to Drone** | Transmits waypoint mission to the connected drone/SITL controller. |
 | **⚡ Arm / Disarm** | Sends safety motor arm/disarm command to the drone. |
-| **🏠 RTL** | Commands Return-to-Launch mode. |
 
 ---
 

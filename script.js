@@ -113,6 +113,21 @@ let resizeTimer = null;
 /** Whether dashboard was manually expanded by user on mobile/tablet */
 let userExpandedDashboard = false;
 
+/** State for Return-to-Launch (RTL / RTH) mode */
+let rthState = {
+  active: false,
+  startPos: null,
+  homePos: null,
+  totalDistanceKm: 0,
+  progress: 0
+};
+
+/** Polyline showing visual return path to launch point */
+let rtlPathLine = null;
+
+/** Drone link / SITL WebSocket bridge connection status */
+let isDroneLinkConnected = false;
+
 
 // ─────────────────────────────────────────────
 // DOM ELEMENT REFERENCES
@@ -336,6 +351,9 @@ function clearAll() {
   stopSimulation();
   waypointMarkers.forEach(m => map.removeLayer(m));
   waypointMarkers = [];
+
+  if (rtlPathLine) { map.removeLayer(rtlPathLine); rtlPathLine = null; }
+  rthState = { active: false, startPos: null, homePos: null, totalDistanceKm: 0, progress: 0 };
 
   if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
   cachedDroneIconEl = null;
@@ -571,7 +589,15 @@ function updateTelemetryDisplay(telemetry) {
   telemHeading.textContent  = telemetry.headingDegrees.toFixed(1) + ' °';
 
   if (telemMode) {
-    telemMode.textContent = telemetry.flightMode || (isDroneLinkConnected ? 'CONNECTED' : (missionState.isSimulating ? 'SIMULATOR' : 'STANDBY'));
+    const mode = telemetry.flightMode || (isDroneLinkConnected ? 'CONNECTED' : (missionState.isSimulating ? (rthState.active ? 'RTL' : 'SIMULATOR') : 'STANDBY'));
+    telemMode.textContent = mode;
+    if (mode === 'RTL') {
+      telemMode.style.color = '#f0883e';
+    } else if (mode === 'LANDED' || mode === 'STANDBY') {
+      telemMode.style.color = '#8b949e';
+    } else {
+      telemMode.style.color = '#58a6ff';
+    }
   }
 
   if (telemArmed) {
@@ -658,6 +684,9 @@ function startSimulation() {
     alreadyCovered += segmentDistances[i];
   }
 
+  if (rtlPathLine) { map.removeLayer(rtlPathLine); rtlPathLine = null; }
+  rthState = { active: false, startPos: null, homePos: null, totalDistanceKm: 0, progress: 0 };
+
   missionState.isSimulating        = true;
   missionState.isPaused            = false;
   missionState.currentSegmentIndex = missionState.resumeFromIndex;
@@ -701,6 +730,11 @@ function startSimulation() {
  */
 function simulationTick() {
   if (missionState.isPaused) return;
+
+  if (rthState.active) {
+    simulationRthTick();
+    return;
+  }
 
   const wps    = missionState.waypoints;
   const segIdx = missionState.currentSegmentIndex;
@@ -806,53 +840,218 @@ function simulationTick() {
     return;
   }
 
-  if (battery <= BATTERY_CRITICAL && !missionState.rthActive) {
-    // FIX: Return-to-Home trigger
-    missionState.rthActive = true;
+  if (battery <= BATTERY_CRITICAL && !rthState.active) {
     showAlert('🔴 CRITICAL BATTERY (' + battery.toFixed(1) + '%) — Returning to Home!', 'warning');
     initiateRTH();
     return;
   }
 
-  if (battery <= BATTERY_LOW && !missionState.rthActive) {
+  if (battery <= BATTERY_LOW && !rthState.active) {
     showAlert('⚠️ LOW BATTERY — ' + battery.toFixed(1) + '%', 'warning');
   }
 }
 
 /**
- * Return-to-Home: inserts the first waypoint as the new destination
- * so the drone flies back to its launch point.
+ * Return-to-Launch (RTL / RTH):
+ * Halts forward mission waypoint traversal and commands drone to fly
+ * directly back to Waypoint 1 (Home) from its exact current location.
+ * Keeps original planned waypoints and route intact on the map.
  */
 function initiateRTH() {
-  stopSimulation();
   if (missionState.waypoints.length < 1) return;
+  if (!droneMarker) return;
 
-  // Insert home waypoint at current drone position → first waypoint
-  const home    = missionState.waypoints[0];
-  const lastWp  = missionState.waypoints[missionState.waypoints.length - 1];
+  const curLatLng = droneMarker.getLatLng();
+  const home = missionState.waypoints[0];
+  const distKm = haversineDistanceKm(curLatLng.lat, curLatLng.lng, home.lat, home.lng);
 
-  // Build a minimal 2-point mission: current position → home
-  const curLat = lastWp.lat;
-  const curLng = lastWp.lng;
+  if (distKm < 0.015) {
+    // Already at or near launch point (< 15 meters)
+    stopSimulation();
+    if (rtlPathLine) {
+      map.removeLayer(rtlPathLine);
+      rtlPathLine = null;
+    }
+    rthState.active = false;
+    missionState.rthActive = false;
+    droneMarker.setLatLng([home.lat, home.lng]);
+    showAlert('🏠 Drone already at launch point (WP 1) — Landed safely.', 'info');
+    updateTelemetryDisplay({
+      altitude: 0,
+      speed: 0,
+      batteryPercent: missionState.batteryRemaining,
+      lat: home.lat,
+      lng: home.lng,
+      headingDegrees: missionState.currentHeading,
+      flightMode: 'LANDED'
+    });
+    updateButtonStates();
+    return;
+  }
 
-  missionState.waypoints        = [{ lat: curLat, lng: curLng }, { lat: home.lat, lng: home.lng }];
-  missionState.resumeFromIndex  = 0;
-  missionState.rthActive        = true;
+  // Setup RTH trajectory state
+  rthState.active = true;
+  rthState.startPos = { lat: curLatLng.lat, lng: curLatLng.lng };
+  rthState.homePos = { lat: home.lat, lng: home.lng };
+  rthState.totalDistanceKm = distKm;
+  rthState.progress = 0;
+  missionState.rthActive = true;
 
-  waypointMarkers.forEach(m => map.removeLayer(m));
-  waypointMarkers = [];
+  // Draw distinct dashed RTL return polyline in high-visibility amber/orange
+  if (rtlPathLine) {
+    map.removeLayer(rtlPathLine);
+  }
+  rtlPathLine = L.polyline([[curLatLng.lat, curLatLng.lng], [home.lat, home.lng]], {
+    color: '#f0883e',
+    weight: 3,
+    dashArray: '6, 6'
+  }).addTo(map);
 
-  missionState.waypoints.forEach((wp, i) => {
-    const marker = L.marker([wp.lat, wp.lng], { icon: createWaypointIcon(i + 1, false) }).addTo(map);
-    waypointMarkers.push(marker);
+  missionState.isSimulating = true;
+  missionState.isPaused = false;
+  btnPause.innerHTML = '&#10074;&#10074; Pause';
+
+  // Ensure simulation timer is running
+  if (simTimerId === null) {
+    simTimerId = setInterval(simulationTick, TICK_INTERVAL_MS);
+  }
+
+  updateButtonStates();
+}
+
+/**
+ * Unified simulation tick for RTL (Return-to-Launch) mode.
+ * Steers drone along the return vector to WP 1, factors wind resistance and battery drain,
+ * descends smoothly as it approaches home, and completes safe landing.
+ */
+function simulationRthTick() {
+  if (missionState.isPaused) return;
+
+  const tickSec = TICK_INTERVAL_MS / 1000;
+  const curPos = droneMarker ? droneMarker.getLatLng() : rthState.startPos;
+  const heading = computeBearing(curPos.lat, curPos.lng, rthState.homePos.lat, rthState.homePos.lng);
+  missionState.currentHeading = heading;
+
+  // Determine effective speed and ground track against wind
+  const windResult = computeWindEffect(heading, ASSUMED_SPEED_MS);
+  const effectiveSpeedMs = windResult.effectiveSpeedMs * SIMULATION_SPEED_MULTIPLIER;
+  const distThisTickKm = (effectiveSpeedMs / 1000) * tickSec;
+
+  // Incremental battery consumption with wind multiplier
+  const drainMultiplier = windResult.isHeadwind
+    ? (1 + (windResult.windComponentMs / ASSUMED_SPEED_MS) * 0.3)
+    : 1;
+  missionState.batteryRemaining = Math.max(
+    0,
+    missionState.batteryRemaining - distThisTickKm * BATTERY_PER_KM * drainMultiplier
+  );
+
+  // Advance RTH progress
+  if (rthState.totalDistanceKm > 0) {
+    rthState.progress += distThisTickKm / rthState.totalDistanceKm;
+  } else {
+    rthState.progress = 1;
+  }
+
+  missionState.distanceCoveredKm += distThisTickKm;
+  missionState.elapsedSeconds += tickSec;
+
+  const t = Math.min(1, Math.max(0, rthState.progress));
+  const newLat = rthState.startPos.lat + (rthState.homePos.lat - rthState.startPos.lat) * t;
+  const newLng = rthState.startPos.lng + (rthState.homePos.lng - rthState.startPos.lng) * t;
+
+  if (droneMarker) {
+    droneMarker.setLatLng([newLat, newLng]);
+    rotateDroneIcon(heading);
+  }
+
+  // Update remaining RTL line segment on map
+  if (rtlPathLine) {
+    rtlPathLine.setLatLngs([[newLat, newLng], [rthState.homePos.lat, rthState.homePos.lng]]);
+  }
+
+  // Altitude profile: maintain baseline until final 20% of return flight, then smooth descent to 0m
+  let altitude = ALTITUDE_BASELINE;
+  if (t >= 0.80) {
+    const descentProgress = (t - 0.80) / 0.20; // 0.0 -> 1.0
+    altitude = Math.max(0, ALTITUDE_BASELINE * (1 - descentProgress));
+  } else {
+    altitude = ALTITUDE_BASELINE + (Math.random() * 2 - 1) * ALTITUDE_JITTER;
+  }
+
+  const dispSpeed = windResult.effectiveSpeedMs + (Math.random() * 2 - 1) * 0.5;
+  const battery = missionState.batteryRemaining;
+
+  updateTelemetryDisplay({
+    altitude: altitude,
+    speed: Math.max(0, dispSpeed),
+    batteryPercent: battery,
+    lat: newLat,
+    lng: newLng,
+    headingDegrees: heading,
+    flightMode: 'RTL'
   });
 
-  updateFlightPath();
+  logTelemetryPoint({
+    altitude: altitude,
+    speed: Math.max(0, dispSpeed),
+    batteryPercent: battery,
+    lat: newLat,
+    lng: newLng,
+    headingDegrees: heading,
+    flightMode: 'RTL',
+    batteryVoltage: (14.0 + (battery / 100.0) * 2.8),
+    batteryCurrent: (12.0 + Math.random() * 2.0)
+  });
 
-  // Resume simulation on the RTH route (brief delay so UI can update)
-  setTimeout(() => {
-    if (simTimerId === null) startSimulation();
-  }, 200);
+  updateCharts(missionState.elapsedSeconds, battery, Math.max(0, dispSpeed));
+
+  // Check battery exhaustion
+  if (battery <= 0) {
+    stopSimulation();
+    if (rtlPathLine) {
+      map.removeLayer(rtlPathLine);
+      rtlPathLine = null;
+    }
+    rthState.active = false;
+    missionState.rthActive = false;
+    showAlert('🔴 BATTERY DEPLETED — Emergency landing performed before reaching home!', 'warning');
+    if (telemMode) telemMode.textContent = 'LANDED';
+    updateButtonStates();
+    return;
+  }
+
+  // Arrival at Home (WP 1)
+  if (rthState.progress >= 1.0) {
+    stopSimulation();
+    if (droneMarker) {
+      droneMarker.setLatLng([rthState.homePos.lat, rthState.homePos.lng]);
+    }
+    if (rtlPathLine) {
+      map.removeLayer(rtlPathLine);
+      rtlPathLine = null;
+    }
+    rthState.active = false;
+    missionState.rthActive = false;
+    missionState.resumeFromIndex = 0;
+
+    for (let i = 0; i < waypointMarkers.length; i++) {
+      waypointMarkers[i].setIcon(createWaypointIcon(i + 1, false));
+    }
+
+    updateTelemetryDisplay({
+      altitude: 0,
+      speed: 0,
+      batteryPercent: missionState.batteryRemaining,
+      lat: rthState.homePos.lat,
+      lng: rthState.homePos.lng,
+      headingDegrees: heading,
+      flightMode: 'LANDED'
+    });
+    if (telemMode) telemMode.textContent = 'LANDED';
+    showAlert('🏠 RTL Complete: Drone returned to launch point (WP 1) and landed safely.', 'info');
+    updateButtonStates();
+  }
 }
 
 /** Called when drone reaches the final waypoint. */
@@ -903,6 +1102,18 @@ function togglePause() {
  */
 function resetSimulation() {
   stopSimulation();
+
+  if (rtlPathLine) {
+    map.removeLayer(rtlPathLine);
+    rtlPathLine = null;
+  }
+  rthState = {
+    active: false,
+    startPos: null,
+    homePos: null,
+    totalDistanceKm: 0,
+    progress: 0
+  };
 
   if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
   cachedDroneIconEl = null;
@@ -1158,6 +1369,18 @@ function updateButtonStates() {
   btnUndo.disabled  = !hasWaypoints || missionState.isSimulating || missionState.waypoints.length <= missionState.resumeFromIndex;
   btnClear.disabled = !hasWaypoints && !missionState.isSimulating;
   btnReset.disabled = !missionState.isSimulating && missionState.resumeFromIndex === 0 && !droneMarker;
+
+  if (btnRtlDrone) {
+    if (appMode === 'live') {
+      btnRtlDrone.disabled = true;
+    } else if (isDroneLinkConnected) {
+      btnRtlDrone.disabled = false;
+      btnRtlDrone.title = "Command Return-To-Launch (MAVLink RTL)";
+    } else {
+      btnRtlDrone.disabled = !missionState.isSimulating || rthState.active;
+      btnRtlDrone.title = rthState.active ? "RTL in progress" : "Return to Launch (WP 1)";
+    }
+  }
 
   if (!missionState.isSimulating) {
     btnPause.innerHTML = '&#10074;&#10074; Pause';
@@ -1841,7 +2064,6 @@ fetchWeatherData();
 // ─────────────────────────────────────────────
 
 let droneSocket = null;
-let isDroneLinkConnected = false;
 
 /**
  * Connects or disconnects the WebSocket link to bridge.py (ws://localhost:8765).
@@ -1877,7 +2099,7 @@ function connectDroneLink() {
     // Show drone command buttons
     if (btnUploadDrone) btnUploadDrone.classList.remove('hidden');
     if (btnArmDrone)    btnArmDrone.classList.remove('hidden');
-    if (btnRtlDrone)    btnRtlDrone.classList.remove('hidden');
+    updateButtonStates();
 
     showAlert('⚡ Connected to SITL / Drone Telemetry Bridge (ws://localhost:8765)', 'info');
   };
@@ -1919,7 +2141,7 @@ function disconnectDroneLink(userInitiated = true) {
 
   if (btnUploadDrone) btnUploadDrone.classList.add('hidden');
   if (btnArmDrone)    btnArmDrone.classList.add('hidden');
-  if (btnRtlDrone)    btnRtlDrone.classList.add('hidden');
+  updateButtonStates();
 
   if (!userInitiated) {
     showAlert('🔌 Drone Link disconnected. Run "python bridge.py" to connect.', 'warning');
@@ -2031,8 +2253,21 @@ if (btnArmDrone) {
 
 if (btnRtlDrone) {
   btnRtlDrone.addEventListener('click', () => {
-    sendDroneCommand('SET_MODE', { mode: 'RTL' });
-    showAlert('🏠 RTL (Return-to-Launch) commanded!', 'info');
+    if (isDroneLinkConnected) {
+      sendDroneCommand('SET_MODE', { mode: 'RTL' });
+      showAlert('🏠 RTL (Return-to-Launch) commanded via MAVLink!', 'info');
+    } else {
+      if (!missionState.isSimulating && !rthState.active) {
+        showAlert('⚠️ Drone is not airborne — cannot trigger RTL', 'warning');
+        return;
+      }
+      if (rthState.active) {
+        showAlert('ℹ️ Return-to-Launch already active', 'info');
+        return;
+      }
+      showAlert('🏠 Manual RTL Triggered: Returning to launch point (WP 1)!', 'warning');
+      initiateRTH();
+    }
   });
 }
 

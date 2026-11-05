@@ -327,6 +327,23 @@ body {
   background: #3d1a1a !important;
 }
 
+#btn-rtl-drone {
+  background: #271e0c !important;
+  border-color: #d29922 !important;
+  color: #f0883e !important;
+  font-weight: 600 !important;
+}
+
+#btn-rtl-drone:hover:not(:disabled) {
+  background: #9e6a03 !important;
+  color: #fff !important;
+}
+
+#btn-rtl-drone:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .drone-cmd-btn {
   background: #1c2333 !important;
   border-color: #58a6ff !important;
