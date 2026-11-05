@@ -32,20 +32,28 @@
       <span id="device-badge" aria-live="polite">detecting...</span>
     </div>
 
-    <!-- Mode Toggle: Simulator / Live -->
-    <div id="mode-toggle" role="group" aria-label="Flight mode selector">
-      <span class="mode-label active" id="mode-label-sim">Simulator</span>
-      <label class="toggle-switch" aria-label="Switch between Simulator and Live tracking mode">
-        <input
-          type="checkbox"
-          id="mode-switch"
-          role="switch"
-          aria-checked="false"
-          aria-label="Live tracking mode"
-        />
-        <span class="toggle-slider"></span>
-      </label>
-      <span class="mode-label" id="mode-label-live">&#128225; Live</span>
+    <!-- Header Right Controls: Mode Toggle & Drone Link -->
+    <div class="header-right">
+      <!-- Mode Toggle: Simulator / Live -->
+      <div id="mode-toggle" role="group" aria-label="Flight mode selector">
+        <span class="mode-label active" id="mode-label-sim">Simulator</span>
+        <label class="toggle-switch" aria-label="Switch between Simulator and Live tracking mode">
+          <input
+            type="checkbox"
+            id="mode-switch"
+            role="switch"
+            aria-checked="false"
+            aria-label="Live tracking mode"
+          />
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="mode-label" id="mode-label-live">&#128225; Phone GPS</span>
+      </div>
+
+      <!-- SITL / MAVLink Bridge Connection Button -->
+      <button id="btn-drone-link" class="drone-link-btn" title="Connect to SITL / MAVLink Bridge (ws://localhost:8765)">
+        <span class="link-status-dot"></span> SITL / Drone: Off
+      </button>
     </div>
   </header>
 
@@ -62,6 +70,9 @@
         <button id="btn-start" disabled aria-label="Start simulation (need at least 2 waypoints)">&#9654; Start</button>
         <button id="btn-pause" disabled aria-label="Pause or resume simulation">&#10074;&#10074; Pause</button>
         <button id="btn-reset" disabled aria-label="Reset simulation">&#x21BB; Reset</button>
+        <button id="btn-upload-drone" class="drone-cmd-btn hidden" title="Upload mission waypoints to SITL / Real Drone">&#x2B06; Upload to Drone</button>
+        <button id="btn-arm-drone" class="drone-cmd-btn hidden" title="ARM / DISARM drone motors">&#x26A1; Arm</button>
+        <button id="btn-rtl-drone" class="drone-cmd-btn hidden" title="Command Return-To-Launch">&#x1F3E0; RTL</button>
       </div>
 
       <!-- The Leaflet map renders here -->
@@ -113,17 +124,37 @@
 
       <!-- Numeric readouts -->
       <div id="telemetry-grid" aria-label="Telemetry readings">
+        <div class="telem-item telem-highlight">
+          <span class="telem-label">Flight Mode</span>
+          <span class="telem-value" id="telem-mode">SIMULATOR</span>
+        </div>
+        <div class="telem-item telem-highlight">
+          <span class="telem-label">Arm Status</span>
+          <span class="telem-value" id="telem-armed">STANDBY</span>
+        </div>
         <div class="telem-item">
           <span class="telem-label">Altitude</span>
           <span class="telem-value" id="telem-altitude">-- m</span>
         </div>
         <div class="telem-item">
-          <span class="telem-label">Speed</span>
+          <span class="telem-label">Ground Speed</span>
           <span class="telem-value" id="telem-speed">-- m/s</span>
         </div>
         <div class="telem-item">
-          <span class="telem-label">Battery</span>
+          <span class="telem-label">Battery Level</span>
           <span class="telem-value" id="telem-battery">-- %</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Pack Voltage</span>
+          <span class="telem-value" id="telem-voltage">-- V</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Motor Current</span>
+          <span class="telem-value" id="telem-current">-- A</span>
+        </div>
+        <div class="telem-item">
+          <span class="telem-label">Heading / Yaw</span>
+          <span class="telem-value" id="telem-heading">-- °</span>
         </div>
         <div class="telem-item">
           <span class="telem-label">Latitude</span>
@@ -132,10 +163,6 @@
         <div class="telem-item">
           <span class="telem-label">Longitude</span>
           <span class="telem-value" id="telem-lng">--</span>
-        </div>
-        <div class="telem-item">
-          <span class="telem-label">Heading</span>
-          <span class="telem-value" id="telem-heading">-- °</span>
         </div>
       </div>
 

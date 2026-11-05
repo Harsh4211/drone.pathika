@@ -67,6 +67,60 @@ body {
   margin-top: 2px;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Drone Link (SITL / MAVLink Bridge) button */
+.drone-link-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.drone-link-btn:hover {
+  border-color: #58a6ff;
+  background: #161b22;
+}
+
+.drone-link-btn.connected {
+  border-color: #00e676;
+  color: #00e676;
+  box-shadow: 0 0 10px rgba(0, 230, 118, 0.2);
+}
+
+.link-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #8b949e;
+  display: inline-block;
+  transition: background 0.3s;
+}
+
+.drone-link-btn.connected .link-status-dot {
+  background: #00e676;
+  box-shadow: 0 0 8px #00e676;
+  animation: pulse-dot 1.5s infinite;
+}
+
+.drone-link-btn.connecting .link-status-dot {
+  background: #d29922;
+  box-shadow: 0 0 6px #d29922;
+}
+
 /* ---------- MODE TOGGLE (Simulator / Live) ---------- */
 #mode-toggle {
   display: flex;
@@ -271,6 +325,29 @@ body {
 
 #btn-clear:hover:not(:disabled) {
   background: #3d1a1a !important;
+}
+
+.drone-cmd-btn {
+  background: #1c2333 !important;
+  border-color: #58a6ff !important;
+  color: #58a6ff !important;
+  font-weight: 600 !important;
+}
+
+.drone-cmd-btn:hover:not(:disabled) {
+  background: #1f6feb !important;
+  color: #fff !important;
+}
+
+#btn-arm-drone.armed {
+  background: #b91c1c !important;
+  border-color: #ef4444 !important;
+  color: #fff !important;
+}
+
+.telem-highlight {
+  border-color: rgba(0, 230, 118, 0.3) !important;
+  background: linear-gradient(180deg, #161b22, #0d1117) !important;
 }
 
 /* ---------- MAP ---------- */

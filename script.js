@@ -124,6 +124,11 @@ const btnStart   = document.getElementById('btn-start');
 const btnPause   = document.getElementById('btn-pause');
 const btnReset   = document.getElementById('btn-reset');
 
+const btnDroneLink   = document.getElementById('btn-drone-link');
+const btnUploadDrone = document.getElementById('btn-upload-drone');
+const btnArmDrone    = document.getElementById('btn-arm-drone');
+const btnRtlDrone    = document.getElementById('btn-rtl-drone');
+
 const statDistance = document.getElementById('stat-distance');
 const statTime     = document.getElementById('stat-time');
 const statBattery  = document.getElementById('stat-battery');
@@ -134,6 +139,11 @@ const telemBattery  = document.getElementById('telem-battery');
 const telemLat      = document.getElementById('telem-lat');
 const telemLng      = document.getElementById('telem-lng');
 const telemHeading  = document.getElementById('telem-heading');
+
+const telemMode    = document.getElementById('telem-mode');
+const telemArmed   = document.getElementById('telem-armed');
+const telemVoltage = document.getElementById('telem-voltage');
+const telemCurrent = document.getElementById('telem-current');
 
 const alertBanner      = document.getElementById('alert-banner');
 const modalOverlay     = document.getElementById('modal-overlay');
@@ -489,6 +499,28 @@ function updateTelemetryDisplay(telemetry) {
   telemLng.textContent      = telemetry.lng.toFixed(6);
   telemHeading.textContent  = telemetry.headingDegrees.toFixed(1) + ' °';
 
+  if (telemMode) {
+    telemMode.textContent = telemetry.flightMode || (isDroneLinkConnected ? 'CONNECTED' : (missionState.isSimulating ? 'SIMULATOR' : 'STANDBY'));
+  }
+
+  if (telemArmed) {
+    if (telemetry.armed !== undefined) {
+      telemArmed.textContent = telemetry.armed ? 'ARMED' : 'DISARMED';
+      telemArmed.style.color = telemetry.armed ? '#00e676' : '#f85149';
+    } else {
+      telemArmed.textContent = missionState.isSimulating ? 'ACTIVE' : 'STANDBY';
+      telemArmed.style.color = missionState.isSimulating ? '#00e676' : '#8b949e';
+    }
+  }
+
+  if (telemVoltage) {
+    telemVoltage.textContent = telemetry.batteryVoltage ? (telemetry.batteryVoltage.toFixed(1) + ' V') : '-- V';
+  }
+
+  if (telemCurrent) {
+    telemCurrent.textContent = telemetry.batteryCurrent !== undefined ? (telemetry.batteryCurrent.toFixed(1) + ' A') : '-- A';
+  }
+
   // Battery color
   if (telemetry.batteryPercent <= BATTERY_CRITICAL) {
     telemBattery.style.color = '#f85149';
@@ -508,6 +540,14 @@ function resetTelemetryDisplay() {
   telemLng.textContent      = '--';
   telemHeading.textContent  = '-- °';
   telemBattery.style.color  = '#e6edf3';
+
+  if (telemMode)    telemMode.textContent = 'STANDBY';
+  if (telemArmed) {
+    telemArmed.textContent = 'STANDBY';
+    telemArmed.style.color = '#8b949e';
+  }
+  if (telemVoltage) telemVoltage.textContent = '-- V';
+  if (telemCurrent) telemCurrent.textContent = '-- A';
 }
 
 
@@ -1442,3 +1482,192 @@ function computeWindEffect(droneHeadingDeg, droneSpeedMs) {
 
 // Initial weather fetch on page load (map center)
 fetchWeatherData();
+
+
+// ─────────────────────────────────────────────
+// MODULE J — MAVLINK & SITL DRONE LINK (WebSocket)
+// ─────────────────────────────────────────────
+
+let droneSocket = null;
+let isDroneLinkConnected = false;
+
+/**
+ * Connects or disconnects the WebSocket link to bridge.py (ws://localhost:8765).
+ */
+function connectDroneLink() {
+  if (droneSocket && (droneSocket.readyState === WebSocket.OPEN || droneSocket.readyState === WebSocket.CONNECTING)) {
+    disconnectDroneLink();
+    return;
+  }
+
+  btnDroneLink.classList.remove('connected');
+  btnDroneLink.classList.add('connecting');
+  btnDroneLink.innerHTML = '<span class="link-status-dot"></span> Connecting...';
+
+  try {
+    droneSocket = new WebSocket('ws://localhost:8765');
+  } catch (err) {
+    onDroneLinkError(err);
+    return;
+  }
+
+  droneSocket.onopen = function () {
+    isDroneLinkConnected = true;
+    btnDroneLink.classList.remove('connecting');
+    btnDroneLink.classList.add('connected');
+    btnDroneLink.innerHTML = '<span class="link-status-dot"></span> 🟢 Drone Link: Online';
+
+    // Stop internal math simulation if it was running
+    if (missionState.isSimulating) {
+      stopSimulation();
+    }
+
+    // Show drone command buttons
+    if (btnUploadDrone) btnUploadDrone.classList.remove('hidden');
+    if (btnArmDrone)    btnArmDrone.classList.remove('hidden');
+    if (btnRtlDrone)    btnRtlDrone.classList.remove('hidden');
+
+    showAlert('⚡ Connected to SITL / Drone Telemetry Bridge (ws://localhost:8765)', 'info');
+  };
+
+  droneSocket.onmessage = function (event) {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === 'telemetry' && payload.data) {
+        onDroneTelemetryReceived(payload.data);
+      }
+    } catch (e) {
+      console.warn('Error parsing drone telemetry:', e);
+    }
+  };
+
+  droneSocket.onerror = function (err) {
+    onDroneLinkError(err);
+  };
+
+  droneSocket.onclose = function () {
+    disconnectDroneLink(false);
+  };
+}
+
+/**
+ * Disconnects the WebSocket bridge and restores local simulation mode.
+ */
+function disconnectDroneLink(userInitiated = true) {
+  isDroneLinkConnected = false;
+  if (droneSocket) {
+    droneSocket.onclose = null;
+    droneSocket.onerror = null;
+    droneSocket.close();
+    droneSocket = null;
+  }
+
+  btnDroneLink.classList.remove('connecting', 'connected');
+  btnDroneLink.innerHTML = '<span class="link-status-dot"></span> SITL / Drone: Off';
+
+  if (btnUploadDrone) btnUploadDrone.classList.add('hidden');
+  if (btnArmDrone)    btnArmDrone.classList.add('hidden');
+  if (btnRtlDrone)    btnRtlDrone.classList.add('hidden');
+
+  if (!userInitiated) {
+    showAlert('🔌 Drone Link disconnected. Run "python bridge.py" to connect.', 'warning');
+  }
+}
+
+function onDroneLinkError(err) {
+  console.warn('Drone Link error:', err);
+  disconnectDroneLink(true);
+  showAlert('⚠️ Could not connect to bridge (ws://localhost:8765). Did you run "python bridge.py"?', 'warning');
+}
+
+/**
+ * Handles incoming real telemetry packets from MAVLink / SITL.
+ */
+function onDroneTelemetryReceived(data) {
+  if (!data || !data.connected) return;
+
+  // 1. Move drone marker on Leaflet map
+  if (data.lat && data.lng) {
+    if (!droneMarker) {
+      droneMarker = L.marker([data.lat, data.lng], {
+        icon: createDroneIcon(data.heading || 0),
+        zIndexOffset: 1000
+      }).addTo(map);
+    } else {
+      droneMarker.setLatLng([data.lat, data.lng]);
+    }
+    rotateDroneIcon(data.heading || 0);
+  }
+
+  // 2. Update telemetry display
+  updateTelemetryDisplay({
+    altitude:       data.altitude || 0,
+    speed:          data.groundSpeed || 0,
+    batteryPercent: data.batteryPercent !== undefined ? data.batteryPercent : 100,
+    lat:            data.lat || 0,
+    lng:            data.lng || 0,
+    headingDegrees: data.heading || 0,
+    flightMode:     data.flightMode || 'ACTIVE',
+    armed:          data.armed,
+    batteryVoltage: data.batteryVoltage,
+    batteryCurrent: data.batteryCurrent
+  });
+
+  // 3. Update ARM button label
+  if (btnArmDrone) {
+    if (data.armed) {
+      btnArmDrone.innerHTML = '⚡ Disarm';
+      btnArmDrone.classList.add('armed');
+    } else {
+      btnArmDrone.innerHTML = '⚡ Arm';
+      btnArmDrone.classList.remove('armed');
+    }
+  }
+
+  // 4. Update charts
+  missionState.elapsedSeconds += 0.1;
+  updateCharts(missionState.elapsedSeconds, data.batteryPercent, data.groundSpeed || 0);
+}
+
+/**
+ * Sends a command to the drone via bridge.py.
+ */
+function sendDroneCommand(command, extra = {}) {
+  if (!droneSocket || droneSocket.readyState !== WebSocket.OPEN) {
+    showAlert('⚠️ Drone bridge is not connected', 'warning');
+    return;
+  }
+  const payload = { command, ...extra };
+  droneSocket.send(JSON.stringify(payload));
+}
+
+// Wire Drone Link Button
+if (btnDroneLink) {
+  btnDroneLink.addEventListener('click', connectDroneLink);
+}
+
+// Wire Drone Command Buttons
+if (btnUploadDrone) {
+  btnUploadDrone.addEventListener('click', () => {
+    if (missionState.waypoints.length < 2) {
+      showAlert('⚠️ Need at least 2 waypoints to upload mission', 'warning');
+      return;
+    }
+    sendDroneCommand('UPLOAD_MISSION', { waypoints: missionState.waypoints });
+    showAlert('⬆ Waypoints uploaded to drone / SITL flight controller!', 'info');
+  });
+}
+
+if (btnArmDrone) {
+  btnArmDrone.addEventListener('click', () => {
+    const isArmed = telemArmed && telemArmed.textContent === 'ARMED';
+    sendDroneCommand(isArmed ? 'DISARM' : 'ARM');
+  });
+}
+
+if (btnRtlDrone) {
+  btnRtlDrone.addEventListener('click', () => {
+    sendDroneCommand('SET_MODE', { mode: 'RTL' });
+    showAlert('🏠 RTL (Return-to-Launch) commanded!', 'info');
+  });
+}
