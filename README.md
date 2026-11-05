@@ -1,9 +1,10 @@
 # Drone Pathika — Mission Planner & Live Flight Dashboard
 
-> A browser-based drone flight path planner and simulator with live telemetry, real-time weather integration, no-fly zone awareness, and device-adaptive UI — built entirely with vanilla HTML/CSS/JavaScript.
+> A browser-based drone mission planner and Ground Control Station (GCS) featuring real-time MAVLink/SITL hardware telemetry streaming, built-in physics simulation, drag-and-drop waypoint routing, live weather integration, Indian DGCA no-fly zone monitoring, and CSV telemetry data logging.
 
 ![Status](https://img.shields.io/badge/Status-Active-00e676?style=flat-square)
-![No Backend](https://img.shields.io/badge/Backend-None%20Required-d29922?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-58a6ff?style=flat-square)
+![MAVLink](https://img.shields.io/badge/MAVLink-Supported-7952b3?style=flat-square)
 ![API Keys](https://img.shields.io/badge/API%20Keys-Not%20Required-2ea043?style=flat-square)
 
 ---
@@ -11,321 +12,265 @@
 ## 📋 Table of Contents
 
 - [Overview](#overview)
-- [Features](#features)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
+- [Hardware & SITL Telemetry Bridge (`bridge.py`)](#hardware--sitl-telemetry-bridge-bridgepy)
 - [File Structure](#file-structure)
-- [How to Use](#how-to-use)
+- [Controls & Operations](#controls--operations)
 - [Configuration](#configuration)
 - [Data Sources](#data-sources)
-- [Screenshots](#screenshots)
 - [Future Advancements](#future-advancements)
-- [Contributing](#contributing)
+- [License & Authors](#license--authors)
 
 ---
 
 ## Overview
 
-**Drone Pathika** is a fully client-side web application that combines a flight path planner with a real-time telemetry dashboard. Users plan drone missions by clicking waypoints on an interactive map, then simulate the flight with a moving drone icon while monitoring live altitude, speed, battery, GPS coordinates, and heading — all updating in real time.
+**Drone Pathika** is an engineering Ground Control Station (GCS) and mission planning platform designed for both simulated and physical drones. It enables operators to plan complex waypoint routes on an interactive map, inspect pre-flight flight dynamics, and monitor live telemetry in two distinct modes:
 
-The simulator factors in **real-time wind and weather conditions** fetched from the Open-Meteo API, applies **wind friction physics** to the drone's movement, and displays **no-fly zones** based on Indian DGCA regulations.
-
-**Built under BSERC Def-Space Summer Internship 2026 project** — no backend, no database, no paid APIs, no build step required. Just open `index.html` and go.
+1. **Autonomous Simulator Mode**: Runs high-fidelity kinematic and aerodynamic calculations factoring in live meteorological wind vectors, battery Peukert drain with internal resistance voltage sag, and automated Return-to-Home (RTH) on critical battery.
+2. **MAVLink / SITL Hardware Bridge Mode**: Connects directly via WebSocket (`ws://localhost:8765`) to real flight controllers (Pixhawk, ArduPilot, PX4) or ArduPilot SITL. Decodes incoming aerospace MAVLink packets (`HEARTBEAT`, `GLOBAL_POSITION_INT`, `SYS_STATUS`, `VFR_HUD`, `ATTITUDE`) to display true pack voltage, motor current draw, armed status, flight mode, and real-time positioning.
 
 ---
 
-## Features
+## Key Features
 
-### Interactive Map & Waypoint Management
-- Click anywhere on the map to add numbered waypoints (1, 2, 3...)
-- Auto-drawn dashed polyline connecting waypoints in order
-- Undo last waypoint or clear all waypoints
-- Waypoints turn **green** once the drone has passed through them
-- Map powered by **Leaflet.js** with **OpenStreetMap** tiles
+### 🗺️ Interactive Waypoint Mission Planning
+- **Click-to-Add Waypoints**: Place sequential navigation waypoints with automatic numbered visual markers.
+- **Draggable Waypoints**: Click and drag any waypoint directly on the map to modify flight paths dynamically.
+- **Individual Waypoint Deletion**: Click on any waypoint marker to inspect exact coordinates and delete it via popup.
+- **Checkpoint Resume**: Completed a mission leg? Add new waypoints and continue from the destination without restarting from waypoint 1.
+- **Mission Export & Import**: Save your waypoint routes to `.json` files or import existing plans instantly.
 
-### Path Stats Calculator
-- **Total Distance** — computed using the Haversine formula (great-circle distance)
-- **Estimated Flight Time** — based on configurable cruise speed (default: 36 km/h)
-- **Estimated Battery Use** — based on configurable drain rate (default: 5%/km, capped at 100%)
-- Stats update live as waypoints are added or removed
+### 🔌 Physical Drone & SITL Integration (MAVLink Bridge)
+- **Real-Time WebSocket Ingestion**: Streams decoded aerospace telemetry at 10 Hz from `bridge.py`.
+- **Flight Controller Monitoring**:
+  - **Flight Modes**: `STABILIZE`, `GUIDED`, `AUTO`, `LOITER`, `RTL`, `LAND`.
+  - **Arming Status**: Safety armed / disarmed indicator with toggle button.
+  - **True Battery Telemetry**: Pack voltage ($V$) and motor current draw ($A$) from `SYS_STATUS`.
+  - **Attitude & Kinematics**: Heading/yaw, climb rate, and groundspeed from `GLOBAL_POSITION_INT` / `VFR_HUD`.
+- **Two-Way Commands**:
+  - `⬆ Upload to Drone`: Uploads waypoints to the flight controller / SITL buffer.
+  - `⚡ Arm / Disarm`: Safety motors toggle command.
+  - `🏠 RTL`: Triggers immediate autonomous Return-To-Launch.
 
-### Flight Simulation Engine
-- Animated drone icon (SVG arrow) flies along the planned path
-- Smooth linear interpolation between waypoints
-- **Drone icon rotates** to match its heading direction in real time
-- **Resume from last checkpoint** — after completing a route, add more waypoints and continue from where the drone stopped (no need to restart from waypoint 1)
-- Pause / Resume / Reset controls
-- Configurable simulation speed multiplier
+### 🌬️ Live Meteorological Weather & Wind Dynamics
+- **Open-Meteo API**: Fetches current wind speed ($km/h$), wind direction ($0^\circ–360^\circ$), and temperature ($^\circ C$) for the launch coordinate.
+- **Aerodynamic Drag Model**:
+  $$v_{\text{effective}} = v_{\text{cruise}} - v_{\text{wind}} \cdot \cos(\theta_{\text{heading}} - \theta_{\text{wind\_from}})$$
+  Headwinds realistically slow the drone and accelerate LiPo battery consumption; tailwinds provide groundspeed boosts.
+- **Dynamic Compass Indicator**: Automatically rotates to display true wind vector direction.
 
-### Live Telemetry Dashboard
-- Real-time numeric readouts:
-  - **Altitude** (simulated with realistic ±5m fluctuation)
-  - **Speed** (m/s with jitter)
-  - **Battery %** (decreases proportionally to distance covered)
-  - **Latitude / Longitude** (current GPS position)
-  - **Heading** (bearing toward next waypoint, 0°–360°)
-- Color-coded battery indicator (green → orange → red)
+### 🚫 Indian DGCA No-Fly Zone (NFZ) Detection
+- **Segment-to-Circle Collision Geometry**: Checks the minimum Euclidean distance between each flight segment and restricted circular airspace.
+- **Zone Classification**:
+  - 🔴 **Restricted Zones** (SVPI Airport, Gandhinagar Secretariat, Raj Bhavan) — turns path red with pulsing warning banner.
+  - 🟡 **Caution Zones** (Sabarmati Ashram, Adalaj Stepwell, University Campus) — highlights path in caution orange.
+- **Safety Disclaimer**: Prominently notes that boundaries are for simulation and operators must verify with official DGCA DigitalSky maps.
 
-### Live Charts
-- **Battery % over Time** — orange line chart, updates every tick
-- **Speed over Time** — blue line chart, updates every tick
-- Powered by **Chart.js**, capped at 200 data points for performance
+### 📊 Real-Time Telemetry & Data Logging
+- **Chart.js Live Graphs**: Real-time scrolling graphs for battery percentage and groundspeed over elapsed time (throttled at 2 Hz for low CPU overhead).
+- **CSV Flight Telemetry Log Export**: Record every telemetry point during flight and export as a standard `.csv` file for lab analysis in Excel, Python, or MATLAB.
 
-### Real-Time Wind & Weather
-- Live weather data fetched from **Open-Meteo API** (free, no API key)
-- Dashboard shows: wind speed (km/h), wind direction (compass + degrees), temperature (°C)
-- Rotating compass arrow indicating wind direction
-- Wind effect classification: Calm / Light Breeze / Moderate / Strong
-- **Wind friction physics applied to simulation:**
-  - `effectiveSpeed = droneSpeed − windSpeed × cos(angleBetweenHeadingAndWind)`
-  - **Headwind** → drone slows down, battery drains ~30% faster
-  - **Tailwind** → drone speeds up
-  - **Crosswind** → no speed change (only lateral drift)
-- Click Refresh Weather anytime to update
+### ♿ Accessibility & Device Responsiveness
+- **WCAG AA Compliance**: High-contrast typography, ARIA dialog modal, `role="alert"` announcements, and keyboard `Escape` dismissal.
+- **Device-Adaptive UI**: Detects desktop, tablet, or mobile viewport and automatically configures layout and telemetry drawers.
 
-### No-Fly Zones
-- **6 hardcoded restricted zones** near Ahmedabad, India (based on DGCA regulations):
-  - SVPI Airport (5 km restricted radius)
-  - Gandhinagar Secretariat (2 km restricted)
-  - Raj Bhavan / Governor House (1.5 km restricted)
-  - Sabarmati Ashram Heritage Zone (1 km caution)
-  - Adalaj Stepwell Heritage Zone (0.8 km caution)
-  - Gujarat University Campus (1.2 km caution)
-- Zones displayed as colored circles on the map (red = restricted, yellow = caution)
-- Hover tooltips with zone name, radius, and type
-- **Automatic path intersection check** — if flight path enters a no-fly zone:
-  - Path line turns **red**
-  - Pulsing **warning banner** appears in the dashboard
-- Legend panel with zone type indicators
+---
 
-### Alerts & Notifications
-- **Low Battery Warning** — pulsing red banner when battery drops below 20%
-- **Mission Complete** — modal popup when drone reaches the final waypoint
-- **No-Fly Zone Violation** — warning when path intersects restricted airspace
+## Architecture
 
-### Simulator / Live Tracking Mode
-- **Toggle switch** in the header to switch between modes
-- **Simulator mode** — all features as described above
-- **Live Tracking mode:**
-  - Requests browser GPS permission (Geolocation API)
-  - Shows real position as a pulsing red dot on the map
-  - Telemetry displays real GPS data (lat, lng, altitude, speed, heading)
-  - Falls back to **IP-based approximate location** if GPS is denied
-  - "LIVE TRACKING ACTIVE" status banner
-
-### Automatic Device Detection & Responsive UI
-- Detects device type using screen width + touch capability + user agent
-- Three layouts: **Desktop**, **Tablet**, **Mobile**
-- Device badge shows detected type (🖥️ / 📟 / 📱)
-- Adaptive changes:
-
-|     Feature      |     Desktop    |        Tablet        |      Mobile      |
-|------------------|----------------|----------------------|------------------|
-| Layout           | Side-by-side   | Stacked              | Stacked, compact |
-| Dashboard        | Always visible | Collapsible          | Collapsible      |
-| Map height       | Full available | 55vh                 | 45vh             |
-| Buttons          | Standard       | Larger touch targets | Full-width       |
-| Waypoint markers | 28px           | 32px                 | 34px             |
-
-- Re-detects on window resize / device rotation
-- Collapsible dashboard toggle on tablet/mobile for more map space
+```
+[ Physical Drone (Pixhawk/PX4) ] OR [ ArduPilot SITL Simulator ]
+                     │
+                     │  MAVLink Telemetry (UDP 14550 or Serial COM)
+                     ▼
+          ┌─────────────────────┐
+          │      bridge.py      │  (Python 3 + pymavlink + websockets)
+          │  Telemetry Decoder  │
+          └─────────────────────┘
+                     │
+                     │  JSON Telemetry Stream (ws://localhost:8765)
+                     ▼
+          ┌─────────────────────┐
+          │    Drone Pathika    │  (HTML5 / CSS3 / Vanilla JS)
+          │  Web GCS Dashboard  │  Leaflet.js + Chart.js
+          └─────────────────────┘
+```
 
 ---
 
 ## Tech Stack
 
-| Technology | Purpose | Source |
-|-----------|---------|--------|
-| HTML5 / CSS3 / JavaScript (ES5+) | Core application | Vanilla, no framework |
-| [Leaflet.js](https://leafletjs.com/) v1.9.4 | Interactive map, markers, polylines | CDN |
-| [Chart.js](https://www.chartjs.org/) v4.4.4 | Live line charts | CDN |
-| [OpenStreetMap](https://www.openstreetmap.org/) | Map tiles | Free, no key |
-| [Open-Meteo](https://open-meteo.com/) | Real-time wind & weather | Free, no key |
-| [ip-api.com](http://ip-api.com/) | IP-based geolocation fallback | Free, no key |
-
-**No backend. No database. No build step. No npm. No API keys.**
+| Component | Technology | Role |
+| :--- | :--- | :--- |
+| **Frontend Core** | HTML5, CSS3, Vanilla JavaScript (ES6+) | User interface, layout, state engine |
+| **Mapping Engine** | [Leaflet.js](https://leafletjs.com/) v1.9.4 | Geospatial rendering, draggable markers |
+| **Live Charts** | [Chart.js](https://www.chartjs.org/) v4.4.4 | Telemetry graphs (battery, speed) |
+| **Telemetry Bridge** | Python 3, `pymavlink`, `websockets` | Decodes MAVLink & streams over WebSocket |
+| **Map Tiles** | [OpenStreetMap](https://www.openstreetmap.org/) | Standard tile layer |
+| **Weather Feed** | [Open-Meteo API](https://open-meteo.com/) | Real-time wind speed, direction, temperature |
+| **IP Fallback** | [ipapi.co](https://ipapi.co/) | HTTPS-compatible geolocation fallback |
 
 ---
 
 ## Getting Started
 
+### 1. Run Live in Browser
+Open the deployed dashboard:
+👉 **[https://harsh4211.github.io/drone.pathika/](https://harsh4211.github.io/drone.pathika/)**
+
+### 2. Run Locally
+Clone the repository:
+```bash
+git clone https://github.com/Harsh4211/drone.pathika.git
+cd drone.pathika
+```
+Start a local HTTP server:
+```bash
+python -m http.server 8080
+```
+Open your browser at **`http://localhost:8080`**.
+
+---
+
+## Hardware & SITL Telemetry Bridge (`bridge.py`)
+
+To stream genuine drone telemetry into Drone Pathika:
+
 ### Prerequisites
-- A modern web browser (Chrome, Firefox, Edge, Safari)
+Install Python dependencies:
+```bash
+pip install pymavlink websockets
+```
 
-### Setup & Run
+### Running the Bridge
 
-- No Setup Needed.
-- Just open modern web browser and open https://harsh4211.github.io/drone.pathika
+#### Option A: High-Fidelity Built-in Quadcopter Simulation
+If you do not have ArduPilot running, test with realistic 4S LiPo battery sag and flight dynamics:
+```bash
+python bridge.py --sim
+```
+
+#### Option B: ArduPilot / PX4 SITL (Software-in-the-Loop)
+Start ArduPilot SITL in your terminal, then launch the bridge:
+```bash
+python bridge.py --device udp:127.0.0.1:14550
+```
+
+#### Option C: Physical Drone via USB Telemetry Radio
+Plug your 433/915 MHz telemetry radio (or direct USB cable from Pixhawk) into your computer:
+```bash
+python bridge.py --device COM3 --baud 57600
+```
+*(On Linux/macOS, use `--device /dev/ttyUSB0`)*
+
+### Connecting in the Web UI
+1. Click **`📡 SITL / Drone: Off`** in the header.
+2. The button will illuminate **`🟢 Drone Link: Online`**.
+3. Real-time telemetry (flight mode, voltage, current draw, attitude) will stream directly into the dashboard!
 
 ---
 
 ## File Structure
 
 ```
-drone-pathika/
-├── index.html      # Page structure, CDN links, all HTML elements
-├── style.css       # Dark "mission control" theme, responsive breakpoints
-├── script.js       # All application logic (modules A through I)
-└── README.md       # This file
+drone.pathika/
+├── index.html       # Semantic HTML5 layout, ARIA attributes, SVG icons
+├── style.css        # Dark "Mission Control" theme, CSS grid, responsive queries
+├── script.js        # Core frontend logic (Modules A through K)
+├── bridge.py        # Python MAVLink & SITL telemetry WebSocket gateway
+├── .gitignore       # Python cache and IDE exclusions
+├── LICENSE          # MIT Open Source License
+└── README.md        # Comprehensive documentation
 ```
 
-### JavaScript Modules (inside `script.js`)
+### JavaScript Modules in `script.js`
 
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| Config & State | 1–90 | Constants, mission state, app mode |
-| Module A | ~90–230 | Map initialization, waypoint management |
-| Module B | ~230–330 | Haversine formula, stats calculator |
-| Module C | ~560–800 | Simulation engine with resume support |
-| Module D | ~330–560 | Telemetry dashboard, Chart.js setup |
-| Module E | ~800–815 | Alert system |
-| Module F | ~815–1030 | Live GPS tracking mode |
-| Module G | ~1085–1190 | Device detection & responsive UI |
-| Module H | ~1195–1370 | No-fly zones (data + map rendering + intersection check) |
-| Module I | ~1375–1620 | Wind & weather (Open-Meteo API + wind friction physics) |
+| Module | Lines | Description |
+| :--- | :--- | :--- |
+| **Config & State** | 1–120 | Global constants, mission state, DOM references |
+| **Module A** | 160–340 | Leaflet map setup, draggable waypoints, icon rotation |
+| **Module B** | 340–420 | Haversine distance, bearing calculations, segment geometry |
+| **Module D** | 420–540 | Chart.js initialization, throttled telemetry plotting |
+| **Module C** | 540–810 | Unified simulation engine, wind friction, incremental battery, RTH |
+| **Module E** | 810–825 | UI Alert banners and notifications |
+| **Module F** | 825–990 | Live device GPS tracking mode (with HTTPS IP fallback) |
+| **Module G** | 990–1100 | Device detection (desktop/tablet/mobile) and drawer toggle |
+| **Module H** | 1100–1240 | DGCA No-Fly Zones, segment distance collision detection |
+| **Module I** | 1240–1370 | Open-Meteo wind API integration and compass visualizer |
+| **Module J** | 1370–1540 | WebSocket client, MAVLink telemetry ingestion, drone command dispatch |
+| **Module K** | 1540–1650 | Mission JSON export/import & CSV flight log recorder |
 
 ---
 
-## How to Use
+## Controls & Operations
 
-### Step-by-Step Demo
-
-1. **Open** `https://harsh4211.github.io/drone.pathika` in your browser
-2. **Click 4–5 points** on the map to plan a route
-3. Check the **stats panel** — distance, ETA, and battery use update live
-4. Watch for **no-fly zone warnings** if your path crosses restricted airspace
-5. Check the **Wind & Weather** panel for current conditions
-6. Click **▶ Start Simulation**
-7. Watch the drone arrow fly and rotate along the planned path
-8. Monitor **live telemetry** numbers and both charts updating in real time
-9. If battery drops below 20%, a **red warning** pulses
-10. When the drone reaches the last waypoint, **"Mission Complete"** appears
-11. Dismiss the modal → **add more waypoints** → click Start to **continue from where you stopped**
-12. Use **↻ Reset** to restart from waypoint 1, or **🗑 Clear All** for a blank map
-
-### Controls
-
-| Button | Action |
-|--------|--------|
-| ↩ Undo Last Point | Remove the last waypoint |
-| 🗑 Clear All | Remove all waypoints and reset everything |
-| ▶ Start Simulation | Begin (or resume) the flight animation |
-| ⏸ Pause / ▶ Resume | Pause or resume mid-flight |
-| ↻ Reset | Stop simulation, reset to waypoint 1 (keeps waypoints) |
-|  Refresh Weather | Re-fetch live wind/weather data |
-| Simulator / Live toggle (Under Development) | Switch between simulation and GPS tracking mode |
+| Control | Description |
+| :--- | :--- |
+| **↩ Undo** | Removes the last placed waypoint. |
+| **🗑 Clear All** | Clears the flight route, removes markers, and resets telemetry. |
+| **▶ Start** | Initiates (or resumes) the flight simulation along planned waypoints. |
+| **⏸ Pause / Resume** | Pauses or resumes simulation in mid-air. |
+| **↻ Reset** | Resets drone to launch position while preserving waypoints. |
+| **📥 Export Plan** | Downloads current waypoints as a `.json` mission file. |
+| **📁 Import Plan** | Loads and renders a `.json` waypoint mission file. |
+| **📊 Flight CSV** | Exports recorded flight telemetry as a `.csv` log for data analysis. |
+| **📡 SITL / Drone Link** | Connects to `bridge.py` for live MAVLink telemetry streaming. |
+| **⬆ Upload to Drone** | Transmits waypoint mission to the connected drone/SITL controller. |
+| **⚡ Arm / Disarm** | Sends safety motor arm/disarm command to the drone. |
+| **🏠 RTL** | Commands Return-to-Launch mode. |
 
 ---
 
 ## Configuration
 
-All configurable constants are at the top of `script.js`:
+Core simulation parameters can be tuned in `script.js`:
 
 ```javascript
-const ASSUMED_SPEED_KMH = 36;              // Drone cruise speed (km/h)
-const BATTERY_PER_KM = 5;                  // Battery drain (% per km)
-const ALTITUDE_BASELINE = 50;              // Simulated altitude (meters)
-const ALTITUDE_JITTER = 5;                 // Altitude fluctuation (±meters)
-const TICK_INTERVAL_MS = 100;              // Simulation tick rate (ms)
-const SIMULATION_SPEED_MULTIPLIER = 3;     // Animation speed (1 = real-time)
-const DEFAULT_CENTER = [23.2156, 72.6369]; // Map center (lat, lng)
-const DEFAULT_ZOOM = 13;                   // Initial zoom level
-const CHART_MAX_POINTS = 200;              // Max data points on charts
+const ASSUMED_SPEED_KMH           = 36;    // Nominal cruise speed (km/h)
+const BATTERY_PER_KM              = 5;     // Battery drain (% per km)
+const ALTITUDE_BASELINE           = 50;    // Simulated cruise altitude (meters)
+const ALTITUDE_JITTER             = 5;     // Random altitude fluctuation (±m)
+const TICK_INTERVAL_MS            = 100;   // Simulation loop interval (ms)
+const SIMULATION_SPEED_MULTIPLIER = 3;     // Animation rate multiplier
+const BATTERY_CRITICAL            = 10;    // Auto-RTH threshold (%)
+const BATTERY_LOW                 = 20;    // Low battery alert threshold (%)
+const CHART_UPDATE_INTERVAL_MS    = 500;   // Chart render throttle (ms)
 ```
 
 ---
 
 ## Data Sources
 
-| Data | Source | Cost | Key Required |
-|------|--------|------|-------------|
-| Map tiles | [OpenStreetMap](https://www.openstreetmap.org/) | Free | No |
-| Wind & weather | [Open-Meteo API](https://open-meteo.com/) | Free (~10,000 req/day) | No |
-| No-fly zones | Hardcoded (based on [DGCA DigitalSky](https://digitalsky.dgca.gov.in/)) | Free | No |
-| IP geolocation | [ip-api.com](http://ip-api.com/) | Free (non-commercial) | No |
-
----
-
-## Screenshots
-
-> *Run the project and try it out — the dark mission control UI is best experienced live!*
-
-**Planned layout:**
-- 🖥️ Desktop: Map (left) + Telemetry sidebar (right)
-- 📟 Tablet: Map (top) + Collapsible dashboard (bottom)
-- 📱 Mobile: Compact stacked layout with touch-friendly controls
+| Source | Provider | Protocol | Cost / Requirements |
+| :--- | :--- | :--- | :--- |
+| **Map Tiles** | OpenStreetMap | HTTPS / Tile PNG | Free (No key) |
+| **Wind & Weather** | Open-Meteo API | HTTPS / REST JSON | Free (No key) |
+| **Airspace Restrictions** | DGCA India Guidelines | Local Coordinates | Free |
+| **IP Geolocation** | ipapi.co | HTTPS / REST JSON | Free (~1,000 req/day) |
+| **Telemetry Transport** | MAVLink Protocol | Binary over UDP/Serial | Open standard |
 
 ---
 
 ## Future Advancements
 
-### Near-Term Improvements
-- [ ] **GeoJSON Export** — Export planned missions as `.geojson` files for sharing or importing into drone controllers
-- [ ] **localStorage Persistence** — Save and reload the last mission between browser sessions
-- [ ] **Waypoint Editing** — Drag waypoints to reposition them after placement
-- [ ] **Waypoint Altitude** — Set per-waypoint altitude for 3D flight paths
-- [ ] **Customizable No-Fly Zones** — Allow users to define their own restricted zones
-
-### API Integrations
-- [ ] **Live No-Fly Zone API** — Integrate [Watchtower by Skylark Drones](https://skylarkdrones.com/watchtower) for real-time Indian airspace data
-- [ ] **Altitude-Specific Wind** — Use [OpenWeatherMap Wind API](https://openweathermap.org/api/wind-speed) for wind data at drone altitude (50m+) instead of ground level (10m)
-- [ ] **DigitalSky NPNT Integration** — Connect to India's official drone permission system for legal compliance
-- [ ] **ADS-B Aircraft Tracking** — Overlay nearby manned aircraft positions for collision awareness
-
-### Simulation Enhancements
-- [ ] **Multiple Simultaneous Drones** — Simulate a fleet of drones flying different routes at the same time
-- [ ] **3D Flight Visualization** — Use Cesium.js or Three.js for 3D terrain-aware flight paths
-- [ ] **Obstacle Avoidance Simulation** — Add buildings/trees and simulate automatic rerouting
-- [ ] **Return-to-Home (RTH)** — Auto-navigate back to launch point when battery is critical
-- [ ] **Geofencing** — Prevent the simulated drone from leaving a defined boundary
-- [ ] **Realistic Battery Model** — Factor in payload weight, altitude, temperature, and motor efficiency
-- [ ] **Wind Gusts & Turbulence** — Simulate random wind changes during flight for realism
-
-### Hardware Connectivity
-- [ ] **MAVLink Protocol Support** — Connect to real drones via WebSocket ↔ MAVLink bridge (e.g., using [MAVProxy](https://ardupilot.org/mavproxy/) or [MAVSDK](https://mavsdk.mavlink.io/))
-- [ ] **Telemetry Ingestion** — Receive real telemetry from PX4/ArduPilot flight controllers
-- [ ] **Video Feed Overlay** — Display live FPV camera feed from the drone on the map
-- [ ] **Mission Upload** — Push planned waypoints directly to the drone's flight controller
-
-### Platform & UX
-- [ ] **Progressive Web App (PWA)** — Installable on mobile devices with offline caching
-- [ ] **Dark/Light Theme Toggle** — User preference for map and UI theme
-- [ ] **Mission History** — Log and replay past flights with telemetry data
-- [ ] **Collaborative Planning** — Share mission plans via URL or QR code
-- [ ] **Voice Commands** — "Add waypoint", "Start simulation", "Show weather" via Web Speech API
-- [ ] **Accessibility (a11y)** — Screen reader support, keyboard navigation, high contrast mode
-
-### Educational Extensions
-- [ ] **Physics Visualizer** — Show force vectors (thrust, drag, gravity, wind) on the drone during simulation
-- [ ] **Flight Log Export** — Generate a CSV/PDF flight report with telemetry data for lab submissions
-- [ ] **Quiz Mode** — Interactive quiz on drone regulations, airspace classes, and flight physics
-- [ ] **Code Walkthrough Mode** — Annotated step-through of each module for learning
+- [ ] **3D Terrain Visualization**: Integrate Cesium.js or Mapbox GL for 3D elevation-aware flight paths.
+- [ ] **Live FPV Video Stream**: Overlay RTSP/WebRTC camera video from drone companion computers.
+- [ ] **QGroundControl `.plan` Compatibility**: Direct file interoperability with standard QGC mission formats.
+- [ ] **Multi-Drone Swarm Control**: Ingest and track multiple MAVLink system IDs on a single shared airspace map.
+- [ ] **Automated Geofence Enforcement**: Soft and hard geofence boundaries with automatic brake-and-hold commands.
 
 ---
 
-## Contributing
+## License & Authors
 
-This is a student project under an Internship, but contributions are welcome!
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m "Add my feature"`
-4. Push to the branch: `git push origin feature/my-feature`
-5. Open a Pull Request
+### Authors
+- **Harsh** — Technical Research, Simulation Engine, MAVLink/WebSocket Architecture & Implementation
+- **Dikshita Deora** — Physics Research, Aerodynamic Wind Friction Modeling & Airspace Regulations
 
----
-
-## Acknowledgments
-
-- **[Leaflet.js](https://leafletjs.com/)** — The best open-source JS library for interactive maps
-- **[Chart.js](https://www.chartjs.org/)** — Simple yet flexible charting
-- **[OpenStreetMap](https://www.openstreetmap.org/)** — Free map tiles for everyone
-- **[Open-Meteo](https://open-meteo.com/)** — Free weather API, no key required
-- **[DGCA India](https://digitalsky.dgca.gov.in/)** — Drone regulation reference
-
----
-
-<p align="center">
-  Built with tea and curiosity<br>
-  <strong>Drone Pathika</strong> — Plan. Simulate. Fly.
-</p>
+*Built under BSERC Def-Space Summer Internship 2026.*

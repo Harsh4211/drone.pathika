@@ -129,6 +129,12 @@ const btnUploadDrone = document.getElementById('btn-upload-drone');
 const btnArmDrone    = document.getElementById('btn-arm-drone');
 const btnRtlDrone    = document.getElementById('btn-rtl-drone');
 
+const btnExportMission   = document.getElementById('btn-export-mission');
+const btnImportMission   = document.getElementById('btn-import-mission');
+const inputImportMission = document.getElementById('input-import-mission');
+const btnExportCSV       = document.getElementById('btn-export-csv');
+const btnModalCSV        = document.getElementById('btn-modal-csv');
+
 const statDistance = document.getElementById('stat-distance');
 const statTime     = document.getElementById('stat-time');
 const statBattery  = document.getElementById('stat-battery');
@@ -225,26 +231,91 @@ function rotateDroneIcon(heading) {
 /**
  * Adds a waypoint at the given position.
  * Blocked during simulation and in live mode.
+ * Supports drag-to-reposition and click-to-delete.
  */
 function addWaypoint(lat, lng) {
   if (missionState.isSimulating) {
     showAlert('🔒 Cannot add waypoints during simulation', 'warning');
     return;
   }
-  if (appMode === 'live') return; // FIX: block waypoint add in live mode
+  if (appMode === 'live') return;
 
   missionState.waypoints.push({ lat, lng });
 
   const num     = missionState.waypoints.length;
   const idx     = num - 1;
   const reached = idx < missionState.resumeFromIndex;
-  const marker  = L.marker([lat, lng], { icon: createWaypointIcon(num, reached) }).addTo(map);
+
+  const marker  = L.marker([lat, lng], {
+    icon: createWaypointIcon(num, reached),
+    draggable: !reached
+  }).addTo(map);
+
+  marker.on('drag', () => {
+    const curIdx = waypointMarkers.indexOf(marker);
+    if (curIdx !== -1) {
+      const pos = marker.getLatLng();
+      missionState.waypoints[curIdx] = { lat: pos.lat, lng: pos.lng };
+      updateFlightPath();
+    }
+  });
+
+  marker.on('dragend', () => {
+    recalculateStats();
+  });
+
+  marker.bindPopup(`
+    <div style="text-align:center; padding: 4px; font-family: sans-serif;">
+      <strong style="color:#00e676;">Waypoint #${num}</strong><br>
+      <small style="color:#8b949e;">${lat.toFixed(5)}, ${lng.toFixed(5)}</small><br>
+      <button onclick="removeWaypointByIndex(${idx})" style="margin-top:6px; padding:4px 10px; background:#f85149; color:#fff; border:none; border-radius:4px; font-size:0.75rem; cursor:pointer;">&#x1F5D1; Delete</button>
+    </div>
+  `);
+
   waypointMarkers.push(marker);
 
   updateFlightPath();
   recalculateStats();
   updateButtonStates();
 }
+
+/**
+ * Removes a specific waypoint by index.
+ * Re-indexes all subsequent waypoint markers and popups.
+ */
+function removeWaypointByIndex(idx) {
+  if (missionState.isSimulating) {
+    showAlert('🔒 Cannot edit waypoints during active simulation', 'warning');
+    return;
+  }
+  if (idx < missionState.resumeFromIndex) {
+    showAlert('🔒 Cannot delete already visited waypoints', 'warning');
+    return;
+  }
+  if (idx >= 0 && idx < missionState.waypoints.length) {
+    missionState.waypoints.splice(idx, 1);
+    const m = waypointMarkers.splice(idx, 1)[0];
+    if (m) map.removeLayer(m);
+
+    // Refresh icons and popups with updated numbers
+    for (let i = 0; i < waypointMarkers.length; i++) {
+      const isReached = i < missionState.resumeFromIndex;
+      waypointMarkers[i].setIcon(createWaypointIcon(i + 1, isReached));
+      waypointMarkers[i].setPopupContent(`
+        <div style="text-align:center; padding: 4px; font-family: sans-serif;">
+          <strong style="color:#00e676;">Waypoint #${i + 1}</strong><br>
+          <small style="color:#8b949e;">${missionState.waypoints[i].lat.toFixed(5)}, ${missionState.waypoints[i].lng.toFixed(5)}</small><br>
+          <button onclick="removeWaypointByIndex(${i})" style="margin-top:6px; padding:4px 10px; background:#f85149; color:#fff; border:none; border-radius:4px; font-size:0.75rem; cursor:pointer;">&#x1F5D1; Delete</button>
+        </div>
+      `);
+    }
+
+    updateFlightPath();
+    recalculateStats();
+    updateButtonStates();
+  }
+}
+window.removeWaypointByIndex = removeWaypointByIndex;
 
 /** Removes the last waypoint (cannot go past resumeFromIndex). */
 function undoLastWaypoint() {
@@ -711,6 +782,18 @@ function simulationTick() {
     lat:            curLat,
     lng:            curLng,
     headingDegrees: curHeading
+  });
+
+  logTelemetryPoint({
+    altitude,
+    speed:          Math.max(0, dispSpeed),
+    batteryPercent: battery,
+    lat:            curLat,
+    lng:            curLng,
+    headingDegrees: curHeading,
+    flightMode:     'SIMULATOR',
+    batteryVoltage: (14.0 + (battery / 100.0) * 2.8),
+    batteryCurrent: (12.0 + Math.random() * 2.0)
   });
 
   updateCharts(missionState.elapsedSeconds, battery, Math.max(0, dispSpeed));
@@ -1624,9 +1707,21 @@ function onDroneTelemetryReceived(data) {
     }
   }
 
-  // 4. Update charts
+  // 4. Update charts & logging
   missionState.elapsedSeconds += 0.1;
   updateCharts(missionState.elapsedSeconds, data.batteryPercent, data.groundSpeed || 0);
+
+  logTelemetryPoint({
+    altitude:       data.altitude || 0,
+    speed:          data.groundSpeed || 0,
+    batteryPercent: data.batteryPercent !== undefined ? data.batteryPercent : 100,
+    lat:            data.lat || 0,
+    lng:            data.lng || 0,
+    headingDegrees: data.heading || 0,
+    flightMode:     data.flightMode || 'ACTIVE',
+    batteryVoltage: data.batteryVoltage,
+    batteryCurrent: data.batteryCurrent
+  });
 }
 
 /**
@@ -1670,4 +1765,141 @@ if (btnRtlDrone) {
     sendDroneCommand('SET_MODE', { mode: 'RTL' });
     showAlert('🏠 RTL (Return-to-Launch) commanded!', 'info');
   });
+}
+
+
+// ─────────────────────────────────────────────
+// MODULE K — MISSION EXPORT/IMPORT & TELEMETRY CSV LOGGING
+// ─────────────────────────────────────────────
+
+let flightTelemetryLog = [];
+
+/**
+ * Logs a telemetry point during flight (throttled to 2 Hz max).
+ */
+let lastLogTime = 0;
+function logTelemetryPoint(telemetry) {
+  const now = Date.now();
+  if (now - lastLogTime < 500) return; // 2 Hz max logging rate
+  lastLogTime = now;
+
+  flightTelemetryLog.push({
+    timestamp: new Date().toISOString(),
+    elapsedSeconds: missionState.elapsedSeconds.toFixed(1),
+    lat: (telemetry.lat || 0).toFixed(6),
+    lng: (telemetry.lng || 0).toFixed(6),
+    altitude: (telemetry.altitude || 0).toFixed(1),
+    speed: (telemetry.speed || 0).toFixed(1),
+    batteryPercent: (telemetry.batteryPercent !== undefined ? telemetry.batteryPercent : 100).toFixed(1),
+    batteryVoltage: telemetry.batteryVoltage ? telemetry.batteryVoltage.toFixed(2) : '',
+    batteryCurrent: telemetry.batteryCurrent !== undefined ? telemetry.batteryCurrent.toFixed(1) : '',
+    heading: (telemetry.headingDegrees || 0).toFixed(1),
+    flightMode: telemetry.flightMode || (isDroneLinkConnected ? 'MAVLINK' : 'SIMULATOR')
+  });
+}
+
+/**
+ * Exports recorded flight telemetry to CSV.
+ */
+function exportTelemetryCSV() {
+  if (flightTelemetryLog.length === 0) {
+    showAlert('⚠️ No flight telemetry data recorded yet. Run a flight first!', 'warning');
+    return;
+  }
+
+  const headers = [
+    'Timestamp', 'Elapsed_Sec', 'Latitude', 'Longitude', 'Altitude_m',
+    'Speed_ms', 'Battery_pct', 'Voltage_V', 'Current_A', 'Heading_deg', 'Flight_Mode'
+  ];
+
+  const rows = flightTelemetryLog.map(r => [
+    r.timestamp, r.elapsedSeconds, r.lat, r.lng, r.altitude,
+    r.speed, r.batteryPercent, r.batteryVoltage, r.batteryCurrent, r.heading, r.flightMode
+  ]);
+
+  const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement('a');
+  link.setAttribute('href', encodedUri);
+  link.setAttribute('download', `drone_pathika_telemetry_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showAlert(`📊 Exported ${flightTelemetryLog.length} telemetry records to CSV!`, 'info');
+}
+
+/**
+ * Exports current waypoint mission plan to JSON file.
+ */
+function exportMissionJSON() {
+  if (missionState.waypoints.length === 0) {
+    showAlert('⚠️ No waypoints to export. Click the map to add waypoints first.', 'warning');
+    return;
+  }
+
+  const mission = {
+    project: 'Drone Pathika',
+    format: 'mission-plan-v1',
+    created: new Date().toISOString(),
+    totalWaypoints: missionState.waypoints.length,
+    totalDistanceKm: missionState.totalDistanceKm,
+    estimatedTimeSeconds: missionState.estimatedTimeSeconds,
+    waypoints: missionState.waypoints
+  };
+
+  const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(mission, null, 2));
+  const link = document.createElement('a');
+  link.setAttribute('href', dataStr);
+  link.setAttribute('download', `drone_pathika_mission_${Date.now()}.json`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showAlert('📥 Mission plan exported successfully!', 'info');
+}
+
+/**
+ * Imports waypoint mission plan from JSON file.
+ */
+function importMissionJSON(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (data && Array.isArray(data.waypoints) && data.waypoints.length > 0) {
+        clearAll();
+        data.waypoints.forEach(wp => addWaypoint(wp.lat, wp.lng));
+        showAlert(`📁 Successfully imported mission with ${data.waypoints.length} waypoints!`, 'info');
+      } else {
+        showAlert('⚠️ Invalid file: no waypoints found in JSON', 'warning');
+      }
+    } catch (err) {
+      console.error(err);
+      showAlert('⚠️ Error reading mission JSON file', 'warning');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Wire Export / Import Event Listeners
+if (btnExportMission) {
+  btnExportMission.addEventListener('click', exportMissionJSON);
+}
+
+if (btnImportMission && inputImportMission) {
+  btnImportMission.addEventListener('click', () => inputImportMission.click());
+  inputImportMission.addEventListener('change', function () {
+    if (this.files && this.files[0]) {
+      importMissionJSON(this.files[0]);
+      this.value = ''; // Reset input so same file can be imported again
+    }
+  });
+}
+
+if (btnExportCSV) {
+  btnExportCSV.addEventListener('click', exportTelemetryCSV);
+}
+
+if (btnModalCSV) {
+  btnModalCSV.addEventListener('click', exportTelemetryCSV);
 }
