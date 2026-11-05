@@ -685,7 +685,8 @@ body {
 }
 
 /* ---------- MODAL ---------- */
-#modal-overlay {
+#modal-overlay,
+#modal-nfz-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.75);
@@ -696,7 +697,8 @@ body {
   padding: 16px;
 }
 
-#modal-overlay.hidden {
+#modal-overlay.hidden,
+#modal-nfz-overlay.hidden {
   display: none;
 }
 

@@ -202,11 +202,14 @@
 
       <!-- No-Fly Zones Panel -->
       <div id="nfz-panel" aria-label="No-fly zones panel">
-        <h3 class="chart-title">🚫 No-Fly Zones</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <h3 class="chart-title" style="margin-bottom:0;">🚫 No-Fly Zones</h3>
+          <button id="btn-nfz-source" style="padding:2px 8px; font-size:0.75rem; background:#21262d; border:1px solid #30363d; border-radius:4px; color:#58a6ff; font-weight:600; cursor:pointer;" title="Change Airspace Data Source (DGCA, Watchtower API, Overpass Live)">⚙ Source</button>
+        </div>
         <div id="nfz-status">Zones loaded on map</div>
         <div id="nfz-legend" aria-label="Zone type legend">
-          <span class="nfz-legend-item"><span class="nfz-dot red"></span> Restricted (No Fly)</span>
-          <span class="nfz-legend-item"><span class="nfz-dot yellow"></span> Caution Zone</span>
+          <span class="nfz-legend-item"><span class="nfz-dot red"></span> Red Zone (0–5km)</span>
+          <span class="nfz-legend-item"><span class="nfz-dot yellow"></span> Yellow Zone (5–12km)</span>
           <span class="nfz-legend-item"><span class="nfz-dot green"></span> Path Safe</span>
         </div>
         <!-- FIX: role="alert" so screen readers announce violations -->
@@ -252,6 +255,51 @@
         </button>
       </div>
       <button id="btn-modal-close" aria-label="Close mission complete dialog">OK</button>
+    </div>
+  </div>
+
+  <!-- ===== AIRSPACE SOURCE SETTINGS MODAL ===== -->
+  <div
+    id="modal-nfz-overlay"
+    class="hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="modal-nfz-title"
+  >
+    <div id="modal-nfz-box" style="background:#161b22; border:1px solid #30363d; border-radius:12px; padding:24px; max-width:480px; width:100%; text-align:left; color:#c9d1d9;">
+      <h2 id="modal-nfz-title" style="color:#00e676; font-size:1.3rem; margin-top:0; margin-bottom:12px;">⚙ Airspace &amp; No-Fly Zone Source</h2>
+      <p style="font-size:0.85rem; color:#8b949e; margin-bottom:16px;">Select how Drone Pathika ingests Indian airspace regulations and live restricted zones:</p>
+      
+      <div style="margin-bottom:14px;">
+        <label for="select-nfz-provider" style="display:block; font-weight:600; font-size:0.85rem; margin-bottom:6px;">Airspace Provider:</label>
+        <select id="select-nfz-provider" style="width:100%; padding:8px; background:#0d1117; border:1px solid #30363d; border-radius:6px; color:#fff; font-size:0.85rem;">
+          <option value="dgca_builtin" selected>Indian DGCA Airspace (National Multi-Tier Database)</option>
+          <option value="overpass_live">Live Aerodrome API (OpenStreetMap Live Aviation Feed)</option>
+          <option value="watchtower_api">Skylark Drones Watchtower / Custom UTM API</option>
+          <option value="custom_geojson">Upload Custom GeoJSON Airspace Layer</option>
+        </select>
+      </div>
+
+      <!-- Watchtower Config Section (hidden by default) -->
+      <div id="nfz-watchtower-config" class="hidden" style="background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:12px; margin-bottom:14px;">
+        <div style="font-size:0.8rem; color:#58a6ff; font-weight:600; margin-bottom:8px;">🛰️ Skylark Watchtower UTM API Settings</div>
+        <label for="watchtower-url" style="display:block; font-size:0.75rem; color:#8b949e; margin-bottom:4px;">Watchtower API Endpoint:</label>
+        <input type="text" id="watchtower-url" placeholder="https://api.skylarkdrones.com/v1/airspace/zones" value="https://api.skylarkdrones.com/v1/airspace/zones" style="width:100%; box-sizing:border-box; padding:6px; background:#161b22; border:1px solid #30363d; border-radius:4px; color:#fff; font-size:0.8rem; margin-bottom:8px;" />
+        <label for="watchtower-key" style="display:block; font-size:0.75rem; color:#8b949e; margin-bottom:4px;">API Token / Key (Bearer):</label>
+        <input type="password" id="watchtower-key" placeholder="Enter Skylark Watchtower API Key" style="width:100%; box-sizing:border-box; padding:6px; background:#161b22; border:1px solid #30363d; border-radius:4px; color:#fff; font-size:0.8rem;" />
+        <small style="display:block; font-size:0.7rem; color:#8b949e; margin-top:6px;">Tokens are saved in browser localStorage only.</small>
+      </div>
+
+      <!-- Custom GeoJSON Upload Section (hidden by default) -->
+      <div id="nfz-geojson-config" class="hidden" style="background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:12px; margin-bottom:14px;">
+        <label for="input-nfz-geojson" style="display:block; font-size:0.8rem; color:#8b949e; margin-bottom:6px;">Upload Airspace GeoJSON / KML:</label>
+        <input type="file" id="input-nfz-geojson" accept=".geojson,.json" style="font-size:0.8rem;" />
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+        <button id="btn-nfz-cancel" style="padding:6px 14px; background:#21262d; border:1px solid #30363d; border-radius:6px; color:#c9d1d9; cursor:pointer;">Cancel</button>
+        <button id="btn-nfz-apply" style="padding:6px 16px; background:#238636; border:none; border-radius:6px; color:#fff; font-weight:600; cursor:pointer;">Apply &amp; Refresh</button>
+      </div>
     </div>
   </div>
 

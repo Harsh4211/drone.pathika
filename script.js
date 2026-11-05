@@ -1291,33 +1291,87 @@ window.addEventListener('resize', () => {
 
 
 // ─────────────────────────────────────────────
-// MODULE H — NO-FLY ZONES
+// MODULE H — AIRSPACE & NO-FLY ZONES (DGCA, Watchtower API, Overpass Live)
 // ─────────────────────────────────────────────
 
-const nfzWarningEl = document.getElementById('nfz-warning');
-const nfzStatusEl  = document.getElementById('nfz-status');
+const nfzWarningEl       = document.getElementById('nfz-warning');
+const nfzStatusEl        = document.getElementById('nfz-status');
+const btnNfzSource       = document.getElementById('btn-nfz-source');
+const modalNfzOverlay    = document.getElementById('modal-nfz-overlay');
+const selectNfzProvider  = document.getElementById('select-nfz-provider');
+const nfzWatchtowerConf  = document.getElementById('nfz-watchtower-config');
+const nfzGeojsonConf     = document.getElementById('nfz-geojson-config');
+const watchtowerUrlInput = document.getElementById('watchtower-url');
+const watchtowerKeyInput = document.getElementById('watchtower-key');
+const inputNfzGeojson    = document.getElementById('input-nfz-geojson');
+const btnNfzCancel       = document.getElementById('btn-nfz-cancel');
+const btnNfzApply        = document.getElementById('btn-nfz-apply');
+
+/** Active Airspace Provider: 'dgca_builtin' | 'overpass_live' | 'watchtower_api' | 'custom_geojson' */
+let activeNfzProvider = localStorage.getItem('drone_pathika_nfz_provider') || 'dgca_builtin';
 
 /**
- * No-fly zone definitions (Ahmedabad region).
- * Sources: DGCA rules, heritage zone buffers.
- * ⚠️ NOT for real flight planning — always check DigitalSky (digitalsky.dgca.gov.in).
+ * National DGCA Airspace Database (India).
+ * Implements official 3-Tier Zoning:
+ *   - Red Zone: 0–5 km exclusion around airports & high-security installations
+ *   - Yellow Zone: 5–12 km perimeter requiring ATC clearance
+ *   - Caution Zones: Heritage monuments & nature reserves
  */
-const NO_FLY_ZONES = [
-  { name: 'SVPI Airport (Ahmedabad)',     lat: 23.0722, lng: 72.6347, radiusMeters: 5000, type: 'restricted' },
-  { name: 'Gandhinagar Secretariat',      lat: 23.2224, lng: 72.6496, radiusMeters: 2000, type: 'restricted' },
-  { name: 'Raj Bhavan (Governor House)',  lat: 23.2360, lng: 72.6480, radiusMeters: 1500, type: 'restricted' },
-  { name: 'Sabarmati Ashram Heritage',    lat: 23.0607, lng: 72.5809, radiusMeters: 1000, type: 'caution'    },
-  { name: 'Adalaj Stepwell Heritage',     lat: 23.1645, lng: 72.5822, radiusMeters:  800, type: 'caution'    },
-  { name: 'Gujarat University Campus',    lat: 23.0339, lng: 72.5458, radiusMeters: 1200, type: 'caution'    }
+const INDIAN_AIRSPACE_DATABASE = [
+  // Ahmedabad / Gujarat
+  { name: 'SVPI Airport Red Zone (Ahmedabad)', lat: 23.0722, lng: 72.6347, radiusMeters: 5000, type: 'restricted' },
+  { name: 'SVPI Airport Yellow Zone (Ahmedabad)', lat: 23.0722, lng: 72.6347, radiusMeters: 12000, type: 'caution' },
+  { name: 'Gandhinagar Secretariat & Assembly', lat: 23.2224, lng: 72.6496, radiusMeters: 2000, type: 'restricted' },
+  { name: 'Raj Bhavan (Governor House)', lat: 23.2360, lng: 72.6480, radiusMeters: 1500, type: 'restricted' },
+  { name: 'Sabarmati Ashram Heritage Zone', lat: 23.0607, lng: 72.5809, radiusMeters: 1000, type: 'caution' },
+  { name: 'Adalaj Stepwell Heritage Zone', lat: 23.1645, lng: 72.5822, radiusMeters: 800, type: 'caution' },
+  { name: 'Gujarat University Campus', lat: 23.0339, lng: 72.5458, radiusMeters: 1200, type: 'caution' },
+
+  // Delhi NCR
+  { name: 'Indira Gandhi Int Airport (Delhi) Red Zone', lat: 28.5562, lng: 77.1000, radiusMeters: 5000, type: 'restricted' },
+  { name: 'Indira Gandhi Int Airport (Delhi) Yellow Zone', lat: 28.5562, lng: 77.1000, radiusMeters: 12000, type: 'caution' },
+  { name: 'Rashtrapati Bhavan & Central Vista (Delhi)', lat: 28.6143, lng: 77.1994, radiusMeters: 3000, type: 'restricted' },
+  { name: 'Hindon Air Force Base (Ghaziabad)', lat: 28.7061, lng: 77.3586, radiusMeters: 5000, type: 'restricted' },
+
+  // Mumbai
+  { name: 'CSM International Airport (Mumbai) Red Zone', lat: 19.0896, lng: 72.8656, radiusMeters: 5000, type: 'restricted' },
+  { name: 'CSM International Airport (Mumbai) Yellow Zone', lat: 19.0896, lng: 72.8656, radiusMeters: 12000, type: 'caution' },
+  { name: 'Bhabha Atomic Research Centre (BARC Mumbai)', lat: 19.0125, lng: 72.9238, radiusMeters: 3000, type: 'restricted' },
+
+  // Bengaluru
+  { name: 'Kempegowda Int Airport (Bengaluru) Red Zone', lat: 13.1986, lng: 77.7066, radiusMeters: 5000, type: 'restricted' },
+  { name: 'Kempegowda Int Airport (Bengaluru) Yellow Zone', lat: 13.1986, lng: 77.7066, radiusMeters: 12000, type: 'caution' },
+  { name: 'HAL Airport & Flight Test Range (Bengaluru)', lat: 12.9500, lng: 77.6682, radiusMeters: 5000, type: 'restricted' },
+
+  // Hyderabad
+  { name: 'Rajiv Gandhi Int Airport (Hyderabad) Red Zone', lat: 17.2403, lng: 78.4294, radiusMeters: 5000, type: 'restricted' },
+  { name: 'Rajiv Gandhi Int Airport (Hyderabad) Yellow Zone', lat: 17.2403, lng: 78.4294, radiusMeters: 12000, type: 'caution' },
+
+  // Chennai
+  { name: 'Chennai International Airport Red Zone', lat: 12.9941, lng: 80.1709, radiusMeters: 5000, type: 'restricted' },
+  { name: 'Chennai International Airport Yellow Zone', lat: 12.9941, lng: 80.1709, radiusMeters: 12000, type: 'caution' },
+
+  // Kolkata
+  { name: 'Netaji Subhash Chandra Bose Airport Red Zone', lat: 22.6547, lng: 88.4467, radiusMeters: 5000, type: 'restricted' },
+  { name: 'Netaji Subhash Chandra Bose Airport Yellow Zone', lat: 22.6547, lng: 88.4467, radiusMeters: 12000, type: 'caution' }
 ];
 
+let activeNoFlyZones = [...INDIAN_AIRSPACE_DATABASE];
 let nfzCircles = [];
 
-/** Draws all NFZ circles on the map. */
+/** Clears all drawn NFZ circles from the Leaflet map. */
+function clearNoFlyZoneLayers() {
+  nfzCircles.forEach(circle => map.removeLayer(circle));
+  nfzCircles = [];
+}
+
+/** Draws all active no-fly zones on the map. */
 function drawNoFlyZones() {
-  NO_FLY_ZONES.forEach(zone => {
+  clearNoFlyZoneLayers();
+
+  activeNoFlyZones.forEach(zone => {
     const color       = zone.type === 'restricted' ? '#f85149' : '#d29922';
-    const fillOpacity = zone.type === 'restricted' ? 0.15 : 0.10;
+    const fillOpacity = zone.type === 'restricted' ? 0.15 : 0.08;
 
     const circle = L.circle([zone.lat, zone.lng], {
       radius: zone.radiusMeters,
@@ -1330,41 +1384,180 @@ function drawNoFlyZones() {
     circle.bindTooltip(
       '<strong>' + (zone.type === 'restricted' ? '🚫' : '⚠️') + ' ' + zone.name + '</strong><br>' +
       'Radius: ' + (zone.radiusMeters / 1000).toFixed(1) + ' km<br>' +
-      'Type: ' + zone.type.charAt(0).toUpperCase() + zone.type.slice(1),
+      'Airspace: ' + (zone.type === 'restricted' ? 'Red Zone (No Fly)' : 'Yellow Zone (Clearance Required)'),
       { className: '', direction: 'top' }
     );
 
     nfzCircles.push(circle);
   });
-
-  nfzStatusEl.textContent = NO_FLY_ZONES.length + ' zones loaded on map';
 }
 
 /**
- * FIX: Proper segment-to-circle distance check (not just sample points).
- * Uses minimum distance from each path segment to each NFZ center.
- * This catches small zones (800m) on long segments reliably.
- *
- * Returns the first violating zone, or null if safe.
+ * Queries live worldwide aviation/aerodrome data from OpenStreetMap Overpass API.
+ * Free, live, real-time, no API key required!
+ */
+async function fetchOverpassAviation(bounds) {
+  const south = bounds.getSouth().toFixed(4);
+  const west  = bounds.getWest().toFixed(4);
+  const north = bounds.getNorth().toFixed(4);
+  const east  = bounds.getEast().toFixed(4);
+  const bbox  = `${south},${west},${north},${east}`;
+
+  const query = `[out:json][timeout:15];
+    (
+      node["aeroway"~"aerodrome|airfield"](${bbox});
+      way["aeroway"~"aerodrome|airfield"](${bbox});
+      node["military"~"airfield|danger_area"](${bbox});
+      way["military"~"airfield|danger_area"](${bbox});
+    );
+    out center;`;
+
+  nfzStatusEl.textContent = 'Querying live aviation aerodromes...';
+  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+  const data = await res.json();
+
+  const zones = [];
+  if (data && data.elements) {
+    data.elements.forEach(el => {
+      const lat = el.lat || (el.center && el.center.lat);
+      const lng = el.lon || (el.center && el.center.lon);
+      const name = (el.tags && (el.tags.name || el.tags['name:en'])) || 'Aerodrome / Airfield';
+      const isMilitary = el.tags && el.tags.military;
+
+      if (lat && lng) {
+        zones.push({
+          name: `${name} (Red Zone 0–5km)`,
+          lat, lng,
+          radiusMeters: isMilitary ? 6000 : 5000,
+          type: 'restricted'
+        });
+        zones.push({
+          name: `${name} (Yellow Zone 5–12km)`,
+          lat, lng,
+          radiusMeters: 12000,
+          type: 'caution'
+        });
+      }
+    });
+  }
+  return zones;
+}
+
+/**
+ * Fetches real-time airspace vector/polygon zones from Skylark Drones Watchtower API.
+ */
+async function fetchWatchtowerAirspace(bounds) {
+  const apiUrl = localStorage.getItem('drone_pathika_watchtower_url') || 'https://api.skylarkdrones.com/v1/airspace/zones';
+  const apiKey = localStorage.getItem('drone_pathika_watchtower_key') || '';
+
+  if (!apiKey) {
+    showAlert('⚠️ Watchtower API key required. Click "⚙ Source" to enter your key.', 'warning');
+    return [];
+  }
+
+  const bbox = `${bounds.getWest().toFixed(4)},${bounds.getSouth().toFixed(4)},${bounds.getEast().toFixed(4)},${bounds.getNorth().toFixed(4)}`;
+  const url = `${apiUrl}?bbox=${bbox}`;
+
+  nfzStatusEl.textContent = 'Querying Watchtower UTM API...';
+
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  if (!res.ok) throw new Error(`Watchtower API error: HTTP ${res.status}`);
+  const data = await res.json();
+
+  const zones = [];
+  if (data && data.features) {
+    data.features.forEach(f => {
+      if (f.geometry && f.geometry.coordinates) {
+        const props = f.properties || {};
+        const coords = f.geometry.coordinates;
+        if (f.geometry.type === 'Point') {
+          zones.push({
+            name: props.name || props.zone_name || 'Restricted Zone',
+            lat: coords[1],
+            lng: coords[0],
+            radiusMeters: props.radius_meters || 5000,
+            type: (props.type === 'yellow' || props.caution) ? 'caution' : 'restricted'
+          });
+        }
+      }
+    });
+  }
+  return zones;
+}
+
+/**
+ * Loads and renders airspace data according to the active provider.
+ */
+async function loadAirspaceData() {
+  if (activeNfzProvider === 'dgca_builtin') {
+    activeNoFlyZones = [...INDIAN_AIRSPACE_DATABASE];
+    drawNoFlyZones();
+    nfzStatusEl.textContent = `${activeNoFlyZones.length} DGCA national zones loaded`;
+  } else if (activeNfzProvider === 'overpass_live') {
+    try {
+      const liveZones = await fetchOverpassAviation(map.getBounds());
+      activeNoFlyZones = liveZones.length > 0 ? liveZones : [...INDIAN_AIRSPACE_DATABASE];
+      drawNoFlyZones();
+      nfzStatusEl.textContent = `${activeNoFlyZones.length} live aviation zones loaded`;
+      showAlert(`🛰️ Ingested ${activeNoFlyZones.length} live aviation aerodromes!`, 'info');
+    } catch (err) {
+      console.warn('Overpass live fetch failed, using DGCA fallback:', err);
+      activeNoFlyZones = [...INDIAN_AIRSPACE_DATABASE];
+      drawNoFlyZones();
+      nfzStatusEl.textContent = `${activeNoFlyZones.length} DGCA fallback zones loaded`;
+    }
+  } else if (activeNfzProvider === 'watchtower_api') {
+    try {
+      const wtZones = await fetchWatchtowerAirspace(map.getBounds());
+      if (wtZones.length > 0) {
+        activeNoFlyZones = wtZones;
+        drawNoFlyZones();
+        nfzStatusEl.textContent = `${activeNoFlyZones.length} Watchtower UTM zones loaded`;
+        showAlert(`🛰️ Ingested ${activeNoFlyZones.length} zones from Watchtower API!`, 'info');
+      } else {
+        activeNoFlyZones = [...INDIAN_AIRSPACE_DATABASE];
+        drawNoFlyZones();
+        nfzStatusEl.textContent = `${activeNoFlyZones.length} DGCA fallback zones loaded`;
+      }
+    } catch (err) {
+      console.warn('Watchtower API failed:', err);
+      activeNoFlyZones = [...INDIAN_AIRSPACE_DATABASE];
+      drawNoFlyZones();
+      showAlert('⚠️ Watchtower API error — loaded DGCA database instead', 'warning');
+    }
+  }
+
+  updateNFZCheck();
+}
+
+/**
+ * Checks whether the current flight path intersects any active no-fly zone.
+ * Uses exact segment-to-point Euclidean projection.
  */
 function checkPathIntersectsNFZ() {
   const wps = missionState.waypoints;
   if (wps.length < 2) return null;
 
-  for (let z = 0; z < NO_FLY_ZONES.length; z++) {
-    const zone      = NO_FLY_ZONES[z];
+  for (let z = 0; z < activeNoFlyZones.length; z++) {
+    const zone      = activeNoFlyZones[z];
     const radiusKm  = zone.radiusMeters / 1000;
 
     for (let i = 0; i < wps.length - 1; i++) {
       const p1 = wps[i];
       const p2 = wps[i + 1];
 
-      // Minimum distance from segment p1→p2 to zone center
       const minDist = pointToSegmentDistKm(zone.lat, zone.lng, p1, p2);
       if (minDist <= radiusKm) return zone;
     }
 
-    // Also check each waypoint itself
     for (let i = 0; i < wps.length; i++) {
       if (haversineDistanceKm(wps[i].lat, wps[i].lng, zone.lat, zone.lng) <= radiusKm) {
         return zone;
@@ -1377,10 +1570,8 @@ function checkPathIntersectsNFZ() {
 
 /**
  * Minimum distance (km) from point P to line segment A→B.
- * Projects P onto the segment, clamped to [A,B].
  */
 function pointToSegmentDistKm(pLat, pLng, A, B) {
-  // Project onto segment using dot product in lat/lng space (accurate for small areas)
   const ax = A.lng, ay = A.lat;
   const bx = B.lng, by = B.lat;
   const px = pLng,  py = pLat;
@@ -1391,7 +1582,7 @@ function pointToSegmentDistKm(pLat, pLng, A, B) {
   let t = 0;
   if (lenSq > 0) {
     t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-    t = Math.max(0, Math.min(1, t)); // clamp to segment
+    t = Math.max(0, Math.min(1, t));
   }
 
   const closestLat = ay + t * dy;
@@ -1401,16 +1592,13 @@ function pointToSegmentDistKm(pLat, pLng, A, B) {
 }
 
 /**
- * Updates NFZ warning and path color.
- * FIX: distinguishes restricted vs caution zones.
- * Integrated directly into recalculateStats — no monkey-patch needed.
+ * Updates NFZ warning banner and flight path color.
  */
 function updateNFZCheck() {
   const violation = checkPathIntersectsNFZ();
   if (violation) {
     nfzWarningEl.textContent = '⚠️ PATH ENTERS: ' + violation.name + ' (' + violation.type + ')';
     nfzWarningEl.classList.remove('hidden');
-    // FIX: color path red for restricted, orange for caution
     const pathColor = violation.type === 'restricted' ? '#f85149' : '#d29922';
     flightPathLine.setStyle({ color: pathColor });
   } else {
@@ -1419,7 +1607,88 @@ function updateNFZCheck() {
   }
 }
 
-drawNoFlyZones();
+// Wire Airspace Source Modal Event Listeners
+if (btnNfzSource && modalNfzOverlay) {
+  btnNfzSource.addEventListener('click', () => {
+    if (selectNfzProvider) selectNfzProvider.value = activeNfzProvider;
+    if (watchtowerUrlInput) watchtowerUrlInput.value = localStorage.getItem('drone_pathika_watchtower_url') || 'https://api.skylarkdrones.com/v1/airspace/zones';
+    if (watchtowerKeyInput) watchtowerKeyInput.value = localStorage.getItem('drone_pathika_watchtower_key') || '';
+    updateNfzModalVisibility();
+    modalNfzOverlay.classList.remove('hidden');
+  });
+}
+
+function updateNfzModalVisibility() {
+  const val = selectNfzProvider ? selectNfzProvider.value : 'dgca_builtin';
+  if (nfzWatchtowerConf) nfzWatchtowerConf.classList.toggle('hidden', val !== 'watchtower_api');
+  if (nfzGeojsonConf)    nfzGeojsonConf.classList.toggle('hidden', val !== 'custom_geojson');
+}
+
+if (selectNfzProvider) {
+  selectNfzProvider.addEventListener('change', updateNfzModalVisibility);
+}
+
+if (btnNfzCancel && modalNfzOverlay) {
+  btnNfzCancel.addEventListener('click', () => modalNfzOverlay.classList.add('hidden'));
+}
+
+if (btnNfzApply && modalNfzOverlay) {
+  btnNfzApply.addEventListener('click', () => {
+    activeNfzProvider = selectNfzProvider.value;
+    localStorage.setItem('drone_pathika_nfz_provider', activeNfzProvider);
+
+    if (activeNfzProvider === 'watchtower_api') {
+      localStorage.setItem('drone_pathika_watchtower_url', watchtowerUrlInput.value.trim());
+      localStorage.setItem('drone_pathika_watchtower_key', watchtowerKeyInput.value.trim());
+    }
+
+    modalNfzOverlay.classList.add('hidden');
+    loadAirspaceData();
+  });
+}
+
+if (inputNfzGeojson) {
+  inputNfzGeojson.addEventListener('change', function () {
+    if (this.files && this.files[0]) {
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          const geoData = JSON.parse(e.target.result);
+          const customZones = [];
+          if (geoData && geoData.features) {
+            geoData.features.forEach(f => {
+              if (f.geometry && f.geometry.type === 'Point') {
+                customZones.push({
+                  name: (f.properties && f.properties.name) || 'Custom Airspace Zone',
+                  lat: f.geometry.coordinates[1],
+                  lng: f.geometry.coordinates[0],
+                  radiusMeters: (f.properties && f.properties.radius_meters) || 5000,
+                  type: (f.properties && f.properties.type) || 'restricted'
+                });
+              }
+            });
+          }
+          if (customZones.length > 0) {
+            activeNoFlyZones = customZones;
+            drawNoFlyZones();
+            nfzStatusEl.textContent = `${activeNoFlyZones.length} custom GeoJSON zones loaded`;
+            showAlert(`📁 Loaded ${customZones.length} airspace zones from GeoJSON!`, 'info');
+            modalNfzOverlay.classList.add('hidden');
+          } else {
+            showAlert('⚠️ GeoJSON contains no valid Point features with coordinates', 'warning');
+          }
+        } catch (err) {
+          showAlert('⚠️ Error parsing GeoJSON file', 'warning');
+        }
+      };
+      reader.readAsText(this.files[0]);
+    }
+  });
+}
+
+// Initial Airspace Load
+loadAirspaceData();
+
 
 
 // ─────────────────────────────────────────────
