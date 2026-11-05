@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Drone Pathika</title>
 
-  <!-- Leaflet CSS (map library) -->
+  <!-- Leaflet CSS — SRI hash added for supply-chain security -->
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
 
@@ -25,14 +26,20 @@
         Drone Pathika
       </div>
       <div class="header-subtitle">Click on the map to plan waypoints, then simulate the flight</div>
-      <span id="device-badge">detecting...</span>
+      <span id="device-badge" aria-live="polite">detecting...</span>
     </div>
 
     <!-- Mode Toggle: Simulator / Live -->
-    <div id="mode-toggle">
+    <div id="mode-toggle" role="group" aria-label="Flight mode selector">
       <span class="mode-label active" id="mode-label-sim">Simulator</span>
-      <label class="toggle-switch">
-        <input type="checkbox" id="mode-switch" />
+      <label class="toggle-switch" aria-label="Switch between Simulator and Live tracking mode">
+        <input
+          type="checkbox"
+          id="mode-switch"
+          role="switch"
+          aria-checked="false"
+          aria-label="Live tracking mode"
+        />
         <span class="toggle-slider"></span>
       </label>
       <span class="mode-label" id="mode-label-live">&#128225; Live</span>
@@ -46,19 +53,19 @@
     <div id="map-section">
 
       <!-- Control buttons above the map -->
-      <div id="controls-bar">
-        <button id="btn-undo" title="Remove the last waypoint">&#x21A9; Undo Last Point</button>
-        <button id="btn-clear" title="Clear all waypoints and reset">&#x1F5D1; Clear All</button>
-        <button id="btn-start" disabled title="Need at least 2 waypoints">&#9654; Start Simulation</button>
-        <button id="btn-pause" disabled title="Pause or resume the simulation">&#10074;&#10074; Pause</button>
-        <button id="btn-reset" disabled title="Stop simulation and reset">&#x21BB; Reset</button>
+      <div id="controls-bar" role="toolbar" aria-label="Mission controls">
+        <button id="btn-undo"  aria-label="Undo last waypoint">&#x21A9; Undo</button>
+        <button id="btn-clear" aria-label="Clear all waypoints">&#x1F5D1; Clear All</button>
+        <button id="btn-start" disabled aria-label="Start simulation (need at least 2 waypoints)">&#9654; Start</button>
+        <button id="btn-pause" disabled aria-label="Pause or resume simulation">&#10074;&#10074; Pause</button>
+        <button id="btn-reset" disabled aria-label="Reset simulation">&#x21BB; Reset</button>
       </div>
 
       <!-- The Leaflet map renders here -->
-      <div id="map"></div>
+      <div id="map" role="application" aria-label="Flight path map — click to add waypoints"></div>
 
       <!-- Path stats panel below the map -->
-      <div id="stats-panel">
+      <div id="stats-panel" aria-label="Pre-flight statistics">
         <div class="stat-item">
           <span class="stat-label">Total Distance</span>
           <span class="stat-value" id="stat-distance">0.00 km</span>
@@ -72,25 +79,37 @@
           <span class="stat-value" id="stat-battery">0 %</span>
         </div>
       </div>
+
+      <!-- Safety disclaimer -->
+      <div id="safety-note" role="note">
+        ⚠️ <strong>Not for real flight planning.</strong> NFZ zones are approximate. Always verify on
+        <a href="https://digitalsky.dgca.gov.in/home" target="_blank" rel="noopener">DigitalSky (DGCA)</a>
+        before flying.
+      </div>
     </div>
 
     <!-- Dashboard collapse toggle (visible on tablet/mobile) -->
-    <button id="dashboard-toggle" onclick="toggleDashboard()">
+    <button
+      id="dashboard-toggle"
+      aria-expanded="false"
+      aria-controls="dashboard-section"
+      aria-label="Toggle telemetry dashboard"
+    >
       <span class="toggle-arrow" id="dash-arrow">▲</span> TELEMETRY DASHBOARD
     </button>
 
     <!-- ---- RIGHT: Telemetry Dashboard ---- -->
-    <div id="dashboard-section">
+    <div id="dashboard-section" aria-label="Live telemetry dashboard">
 
       <h2 class="dashboard-heading">Live Telemetry</h2>
 
       <!-- Live mode status banner (hidden by default) -->
-      <div id="live-status-banner" class="hidden">
+      <div id="live-status-banner" class="hidden" role="status" aria-live="polite">
         <span class="live-dot"></span> LIVE TRACKING ACTIVE
       </div>
 
       <!-- Numeric readouts -->
-      <div id="telemetry-grid">
+      <div id="telemetry-grid" aria-label="Telemetry readings">
         <div class="telem-item">
           <span class="telem-label">Altitude</span>
           <span class="telem-value" id="telem-altitude">-- m</span>
@@ -118,8 +137,8 @@
       </div>
 
       <!-- Wind & Weather Panel (data from Open-Meteo) -->
-      <div id="wind-panel">
-        <h3 class="chart-title">🌬️ Wind & Weather <small>(Open-Meteo)</small></h3>
+      <div id="wind-panel" aria-label="Wind and weather panel">
+        <h3 class="chart-title">🌬️ Wind &amp; Weather <small>(Open-Meteo)</small></h3>
         <div id="wind-grid">
           <div class="telem-item">
             <span class="telem-label">Wind Speed</span>
@@ -138,63 +157,77 @@
             <span class="telem-value" id="wind-effect">--</span>
           </div>
         </div>
-        <div id="wind-visual">
+        <div id="wind-visual" aria-hidden="true">
           <div id="wind-arrow-box">
             <div id="wind-arrow">➤</div>
           </div>
           <span id="wind-desc">Click "Refresh" to load weather</span>
         </div>
-        <button id="btn-refresh-weather" onclick="fetchWeatherData()">🔄 Refresh Weather</button>
+        <button id="btn-refresh-weather" aria-label="Refresh weather data">🔄 Refresh Weather</button>
       </div>
 
       <!-- No-Fly Zones Panel -->
-      <div id="nfz-panel">
+      <div id="nfz-panel" aria-label="No-fly zones panel">
         <h3 class="chart-title">🚫 No-Fly Zones</h3>
         <div id="nfz-status">Zones loaded on map</div>
-        <div id="nfz-legend">
+        <div id="nfz-legend" aria-label="Zone type legend">
           <span class="nfz-legend-item"><span class="nfz-dot red"></span> Restricted (No Fly)</span>
           <span class="nfz-legend-item"><span class="nfz-dot yellow"></span> Caution Zone</span>
           <span class="nfz-legend-item"><span class="nfz-dot green"></span> Path Safe</span>
         </div>
-        <div id="nfz-warning" class="hidden">⚠️ FLIGHT PATH ENTERS A NO-FLY ZONE!</div>
+        <!-- FIX: role="alert" so screen readers announce violations -->
+        <div id="nfz-warning" class="hidden" role="alert" aria-live="assertive">
+          ⚠️ FLIGHT PATH ENTERS A NO-FLY ZONE!
+        </div>
       </div>
 
       <!-- Alert banner (hidden by default) -->
-      <div id="alert-banner" class="hidden"></div>
+      <!-- FIX: role="alert" for screen reader announcements -->
+      <div id="alert-banner" class="hidden" role="alert" aria-live="assertive"></div>
 
       <!-- Charts -->
       <div class="chart-container">
         <h3 class="chart-title">Battery % over Time</h3>
-        <canvas id="chart-battery"></canvas>
+        <canvas id="chart-battery" aria-label="Battery percentage over time chart" role="img"></canvas>
       </div>
 
       <div class="chart-container">
         <h3 class="chart-title">Speed over Time</h3>
-        <canvas id="chart-speed"></canvas>
+        <canvas id="chart-speed" aria-label="Speed over time chart" role="img"></canvas>
       </div>
     </div>
   </div>
 
   <!-- ===== MISSION COMPLETE MODAL ===== -->
-  <div id="modal-overlay" class="hidden">
+  <!-- FIX: role=dialog, aria-modal, aria-labelledby, Escape key handled in JS -->
+  <div
+    id="modal-overlay"
+    class="hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="modal-title"
+  >
     <div id="modal-box">
-      <h2>&#10003; Mission Complete</h2>
+      <h2 id="modal-title">&#10003; Mission Complete</h2>
       <p>The drone has reached its final waypoint.<br />
         <small>Add more waypoints and click Start to continue the mission.</small>
       </p>
-      <button id="btn-modal-close">OK</button>
+      <button id="btn-modal-close" aria-label="Close mission complete dialog">OK</button>
     </div>
   </div>
 
   <!-- ===== SCRIPTS ===== -->
-  <!-- Leaflet JS (map library) -->
+  <!-- Leaflet JS — SRI hash for integrity -->
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV/XN/WLI="
     crossorigin=""
   ></script>
 
-  <!-- Chart.js (charting library) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
+    crossorigin="anonymous"
+  ></script>
 
   <!-- Our application code -->
   <script src="script.js"></script>

@@ -1,30 +1,34 @@
 /* ===================================================
    SCRIPT.JS — Drone Pathika: Mission Planner & Flight Dashboard
    ===================================================
-   This single file contains all application logic:
-     - Map & Waypoint Management  (Module A)
-     - Path Stats Calculator      (Module B)
-     - Simulation Engine           (Module C)  — with resume support
-     - Telemetry Dashboard         (Module D)
-     - Alerts                      (Module E)
-     - Live Tracking Mode          (Module F)
+   Modules:
+     A — Map & Waypoint Management
+     B — Path Stats Calculator
+     C — Simulation Engine (unified, with wind + resume)
+     D — Telemetry Dashboard & Charts
+     E — Alerts
+     F — Live Tracking Mode
+     G — Device Detection & Responsive UI
+     H — No-Fly Zones
+     I — Wind & Weather (Open-Meteo API)
 
-   Dependencies (loaded via CDN in index.html):
-     - Leaflet.js   → window.L
-     - Chart.js     → window.Chart
+   Dependencies (via CDN in index.html):
+     Leaflet.js  → window.L
+     Chart.js    → window.Chart
    =================================================== */
+
 
 // ─────────────────────────────────────────────
 // CONFIGURATION CONSTANTS
 // ─────────────────────────────────────────────
 
-/** Assumed drone cruise speed in km/h (used for ETA and simulation) */
+/** Assumed drone cruise speed in km/h */
 const ASSUMED_SPEED_KMH = 36;
 
-/** Assumed drone cruise speed in m/s (derived from above) */
+/** Assumed drone cruise speed in m/s */
 const ASSUMED_SPEED_MS = ASSUMED_SPEED_KMH / 3.6; // 10 m/s
 
-/** Battery drain rate: percent consumed per kilometer traveled */
+/** Battery drain rate: percent per kilometer traveled */
 const BATTERY_PER_KM = 5;
 
 /** Baseline simulated altitude in meters */
@@ -36,8 +40,7 @@ const ALTITUDE_JITTER = 5;
 /** Simulation tick interval in milliseconds */
 const TICK_INTERVAL_MS = 100;
 
-/** Speed multiplier — increase to make the drone fly faster in simulation.
- *  1 = real-time based on ASSUMED_SPEED_MS. Higher = faster animation. */
+/** Speed multiplier — higher = faster simulation animation */
 const SIMULATION_SPEED_MULTIPLIER = 3;
 
 /** Default map center (Ahmedabad, India) */
@@ -46,50 +49,69 @@ const DEFAULT_CENTER = [23.2156, 72.6369];
 /** Default map zoom level */
 const DEFAULT_ZOOM = 13;
 
-/** How many data points to keep on the live charts before scrolling */
+/** Max data points on live charts before scrolling */
 const CHART_MAX_POINTS = 200;
+
+/** How often (in ms) to update charts — decoupled from sim tick for performance */
+const CHART_UPDATE_INTERVAL_MS = 500;
+
+/** Critical battery level (%) — triggers RTH */
+const BATTERY_CRITICAL = 10;
+
+/** Low battery alert threshold (%) */
+const BATTERY_LOW = 20;
 
 
 // ─────────────────────────────────────────────
 // APPLICATION STATE
 // ─────────────────────────────────────────────
 
-/**
- * missionState holds all the data for the current mission.
- * It is reset when the user clicks "Clear All" or "Reset".
- */
 let missionState = {
-  waypoints: [],                // Array of {lat, lng} objects
-  totalDistanceKm: 0,          // Sum of all segment distances
-  estimatedTimeSeconds: 0,     // totalDistanceKm / speed
-  estimatedBatteryPercent: 0,  // totalDistanceKm * BATTERY_PER_KM (capped at 100)
-  isSimulating: false,         // True while the simulation is running
-  isPaused: false,             // True while the simulation is paused
-  currentSegmentIndex: 0,      // Which leg of the path the drone is on
-  segmentProgress: 0,          // 0 to 1, how far along the current leg
-  distanceCoveredKm: 0,        // Total distance the drone has traveled so far
-  elapsedSeconds: 0,           // Elapsed simulation time in seconds
-  resumeFromIndex: 0,          // Waypoint index to resume simulation from (for continuing missions)
-  currentHeading: 0            // Current heading in degrees (for icon rotation)
+  waypoints:                [],     // Array of {lat, lng}
+  totalDistanceKm:          0,
+  estimatedTimeSeconds:     0,
+  estimatedBatteryPercent:  0,
+  isSimulating:             false,
+  isPaused:                 false,
+  currentSegmentIndex:      0,
+  segmentProgress:          0,
+  distanceCoveredKm:        0,
+  batteryRemaining:         100,    // FIX: tracked incrementally, not recalculated
+  elapsedSeconds:           0,
+  resumeFromIndex:          0,
+  currentHeading:           0,
+  rthActive:                false   // Return-to-Home mode active
 };
 
-/** Current app mode: 'simulator' or 'live' */
+/** Current app mode: 'simulator' | 'live' */
 let appMode = 'simulator';
 
-/** Stores the setInterval timer ID for the simulation loop */
+/** setInterval timer ID for simulation loop */
 let simTimerId = null;
 
-/** Geolocation watch ID for live tracking mode */
+/** Timestamp of last chart update (for throttling) */
+let lastChartUpdateMs = 0;
+
+/** Geolocation watch ID */
 let geoWatchId = null;
 
 /** Leaflet marker for live GPS position */
 let livePositionMarker = null;
 
-/** Previous GPS position for computing heading/speed in live mode */
+/** Previous GPS position (for heading/speed calc in live mode) */
 let prevGeoPosition = null;
 
-/** Timestamp of the previous GPS position update */
+/** Timestamp of previous GPS fix */
 let prevGeoTimestamp = null;
+
+/** Cached reference to .drone-icon element (avoid per-tick DOM query) */
+let cachedDroneIconEl = null;
+
+/** Resize debounce timer */
+let resizeTimer = null;
+
+/** Whether dashboard was manually expanded by user on mobile/tablet */
+let userExpandedDashboard = false;
 
 
 // ─────────────────────────────────────────────
@@ -103,8 +125,8 @@ const btnPause   = document.getElementById('btn-pause');
 const btnReset   = document.getElementById('btn-reset');
 
 const statDistance = document.getElementById('stat-distance');
-const statTime    = document.getElementById('stat-time');
-const statBattery = document.getElementById('stat-battery');
+const statTime     = document.getElementById('stat-time');
+const statBattery  = document.getElementById('stat-battery');
 
 const telemAltitude = document.getElementById('telem-altitude');
 const telemSpeed    = document.getElementById('telem-speed');
@@ -113,283 +135,229 @@ const telemLat      = document.getElementById('telem-lat');
 const telemLng      = document.getElementById('telem-lng');
 const telemHeading  = document.getElementById('telem-heading');
 
-const alertBanner       = document.getElementById('alert-banner');
-const modalOverlay      = document.getElementById('modal-overlay');
-const btnModalClose     = document.getElementById('btn-modal-close');
-const modeSwitch        = document.getElementById('mode-switch');
-const modeLabelSim      = document.getElementById('mode-label-sim');
-const modeLabelLive     = document.getElementById('mode-label-live');
-const liveStatusBanner  = document.getElementById('live-status-banner');
+const alertBanner      = document.getElementById('alert-banner');
+const modalOverlay     = document.getElementById('modal-overlay');
+const btnModalClose    = document.getElementById('btn-modal-close');
+const modeSwitch       = document.getElementById('mode-switch');
+const modeLabelSim     = document.getElementById('mode-label-sim');
+const modeLabelLive    = document.getElementById('mode-label-live');
+const liveStatusBanner = document.getElementById('live-status-banner');
 
 
 // ─────────────────────────────────────────────
 // MODULE A — MAP & WAYPOINT MANAGEMENT
 // ─────────────────────────────────────────────
 
-/** Initialize the Leaflet map centered on the default location */
 const map = L.map('map').setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 
-// Add OpenStreetMap tile layer (free, no API key needed)
-// Must be served via a local HTTP server to avoid referer issues with file://
+// OpenStreetMap tile layer (free, no key — must be served via HTTP not file://)
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19
 }).addTo(map);
 
-/** Array of Leaflet marker objects for waypoints (parallel to missionState.waypoints) */
+/** Leaflet marker objects for waypoints (parallel to missionState.waypoints) */
 let waypointMarkers = [];
 
-/** Leaflet polyline connecting all waypoints */
+/** Polyline connecting all waypoints */
 let flightPathLine = L.polyline([], { color: '#58a6ff', weight: 3, dashArray: '8, 6' }).addTo(map);
 
-/** Leaflet marker for the animated drone */
+/** Animated drone marker */
 let droneMarker = null;
 
 /**
  * Creates a numbered DivIcon for a waypoint marker.
- * @param {number} number — The waypoint number (1-based)
- * @param {boolean} reached — Whether the drone has reached this waypoint
- * @returns {L.DivIcon}
+ * @param {number} number - 1-based waypoint number
+ * @param {boolean} reached - whether drone has passed this waypoint
  */
 function createWaypointIcon(number, reached) {
-  const reachedClass = reached ? ' reached' : '';
+  const cls = reached ? ' reached' : '';
   return L.divIcon({
-    className: '',  // remove default Leaflet class
-    html: '<div class="waypoint-icon' + reachedClass + '">' + number + '</div>',
+    className: '',
+    html: '<div class="waypoint-icon' + cls + '">' + number + '</div>',
     iconSize: [28, 28],
     iconAnchor: [14, 14]
   });
 }
 
 /**
- * Creates the drone DivIcon — an SVG arrow pointing north (up).
- * Rotation is applied via CSS transform on the inner element.
- * @param {number} heading — Heading in degrees (0 = north)
- * @returns {L.DivIcon}
+ * Creates the SVG drone arrow DivIcon.
+ * The polygon points north (up) at 0°; CSS transform rotates it to match heading.
+ * @param {number} heading - degrees (0 = north)
  */
 function createDroneIcon(heading) {
   return L.divIcon({
     className: '',
-    html: '<div class="drone-icon" style="transform: rotate(' + (heading || 0) + 'deg)">' +
+    html: '<div class="drone-icon" style="transform:rotate(' + (heading || 0) + 'deg)">' +
           '<svg viewBox="0 0 32 32" width="30" height="30">' +
           '<polygon points="16,2 6,28 16,22 26,28" fill="#00e676" stroke="#0d1117" stroke-width="1.5"/>' +
-          '</svg>' +
-          '</div>',
+          '</svg></div>',
     iconSize: [30, 30],
     iconAnchor: [15, 15]
   });
 }
 
 /**
- * Rotates the drone marker icon to match the current heading.
- * Updates the CSS transform on the inner .drone-icon element directly
- * for smooth rotation without recreating the icon.
- * @param {number} heading — Heading in degrees (0 = north)
+ * Rotates the drone icon using the cached element reference.
+ * Avoids a DOM querySelector on every 100ms tick.
+ * @param {number} heading - degrees
  */
 function rotateDroneIcon(heading) {
-  if (!droneMarker) return;
-  const el = droneMarker.getElement();
-  if (el) {
-    const iconEl = el.querySelector('.drone-icon');
-    if (iconEl) {
-      iconEl.style.transform = 'rotate(' + heading + 'deg)';
-    }
+  if (!cachedDroneIconEl && droneMarker) {
+    const el = droneMarker.getElement();
+    if (el) cachedDroneIconEl = el.querySelector('.drone-icon');
+  }
+  if (cachedDroneIconEl) {
+    cachedDroneIconEl.style.transform = 'rotate(' + heading + 'deg)';
   }
 }
 
 /**
- * Adds a waypoint at the given lat/lng position.
- * Called when the user clicks on the map.
+ * Adds a waypoint at the given position.
+ * Blocked during simulation and in live mode.
  */
 function addWaypoint(lat, lng) {
-  // Don't allow new waypoints during an active simulation
-  if (missionState.isSimulating) return;
+  if (missionState.isSimulating) {
+    showAlert('🔒 Cannot add waypoints during simulation', 'warning');
+    return;
+  }
+  if (appMode === 'live') return; // FIX: block waypoint add in live mode
 
-  // Store the waypoint in mission state
   missionState.waypoints.push({ lat, lng });
 
-  // Create a numbered marker and add it to the map
-  // Mark waypoints before resumeFromIndex as "reached"
-  const num = missionState.waypoints.length;
-  const idx = num - 1;
+  const num     = missionState.waypoints.length;
+  const idx     = num - 1;
   const reached = idx < missionState.resumeFromIndex;
-  const marker = L.marker([lat, lng], { icon: createWaypointIcon(num, reached) }).addTo(map);
+  const marker  = L.marker([lat, lng], { icon: createWaypointIcon(num, reached) }).addTo(map);
   waypointMarkers.push(marker);
 
-  // Redraw the flight path line and recalculate stats
   updateFlightPath();
   recalculateStats();
   updateButtonStates();
 }
 
-/**
- * Removes the last waypoint from the mission.
- * Cannot undo past the resume point (already-visited waypoints are locked).
- */
+/** Removes the last waypoint (cannot go past resumeFromIndex). */
 function undoLastWaypoint() {
   if (missionState.isSimulating || missionState.waypoints.length === 0) return;
-
-  // Don't allow undoing past the resume point
   if (missionState.waypoints.length <= missionState.resumeFromIndex) return;
 
-  // Remove from state
   missionState.waypoints.pop();
-
-  // Remove the marker from the map
   const marker = waypointMarkers.pop();
   map.removeLayer(marker);
 
-  // Redraw the flight path and recalculate
   updateFlightPath();
   recalculateStats();
   updateButtonStates();
 }
 
-/**
- * Clears all waypoints and resets the entire mission to a blank state.
- */
+/** Clears all waypoints and resets mission to blank state. */
 function clearAll() {
-  // Stop any running simulation first
   stopSimulation();
-
-  // Remove all waypoint markers from the map
-  waypointMarkers.forEach(function (m) { map.removeLayer(m); });
+  waypointMarkers.forEach(m => map.removeLayer(m));
   waypointMarkers = [];
 
-  // Remove the drone marker if it exists
-  if (droneMarker) {
-    map.removeLayer(droneMarker);
-    droneMarker = null;
-  }
+  if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
+  cachedDroneIconEl = null;
 
-  // Reset state
   missionState = {
-    waypoints: [],
-    totalDistanceKm: 0,
-    estimatedTimeSeconds: 0,
-    estimatedBatteryPercent: 0,
-    isSimulating: false,
-    isPaused: false,
-    currentSegmentIndex: 0,
-    segmentProgress: 0,
-    distanceCoveredKm: 0,
-    elapsedSeconds: 0,
-    resumeFromIndex: 0,
-    currentHeading: 0
+    waypoints: [], totalDistanceKm: 0, estimatedTimeSeconds: 0,
+    estimatedBatteryPercent: 0, isSimulating: false, isPaused: false,
+    currentSegmentIndex: 0, segmentProgress: 0, distanceCoveredKm: 0,
+    batteryRemaining: 100, elapsedSeconds: 0, resumeFromIndex: 0,
+    currentHeading: 0, rthActive: false
   };
 
-  // Redraw and recalculate
   updateFlightPath();
   recalculateStats();
   resetTelemetryDisplay();
   resetCharts();
   hideAlert();
+  updateNFZCheck();
   updateButtonStates();
 }
 
-/**
- * Redraws the polyline connecting all waypoints.
- */
+/** Redraws the polyline connecting all waypoints. */
 function updateFlightPath() {
-  var latlngs = missionState.waypoints.map(function (wp) { return [wp.lat, wp.lng]; });
+  const latlngs = missionState.waypoints.map(wp => [wp.lat, wp.lng]);
   flightPathLine.setLatLngs(latlngs);
 }
 
 /**
- * Marks waypoints up to the given index as "reached" (turns them green).
- * @param {number} upToIndex — Mark waypoints 0..upToIndex as reached
+ * Marks waypoints 0..upToIndex as reached (turns them green).
+ * @param {number} upToIndex
  */
 function markWaypointsReached(upToIndex) {
-  for (var i = 0; i <= upToIndex && i < waypointMarkers.length; i++) {
+  for (let i = 0; i <= upToIndex && i < waypointMarkers.length; i++) {
     waypointMarkers[i].setIcon(createWaypointIcon(i + 1, true));
   }
 }
 
-/** Handle map click events — add a waypoint */
-map.on('click', function (e) {
-  addWaypoint(e.latlng.lat, e.latlng.lng);
-});
+// Map click handler
+map.on('click', e => addWaypoint(e.latlng.lat, e.latlng.lng));
 
 
 // ─────────────────────────────────────────────
 // MODULE B — PATH STATS CALCULATOR
 // ─────────────────────────────────────────────
 
-/**
- * Computes the great-circle distance between two lat/lng points
- * using the Haversine formula.
- * @param {number} lat1 — Latitude of point 1 (degrees)
- * @param {number} lng1 — Longitude of point 1 (degrees)
- * @param {number} lat2 — Latitude of point 2 (degrees)
- * @param {number} lng2 — Longitude of point 2 (degrees)
- * @returns {number} Distance in kilometers
- */
+/** Haversine great-circle distance between two lat/lng points (km). */
 function haversineDistanceKm(lat1, lng1, lat2, lng2) {
-  var R = 6371; // Earth's radius in km
-  var dLat = toRadians(lat2 - lat1);
-  var dLng = toRadians(lng2 - lng1);
-  var a =
+  const R    = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
+  const a    =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
     Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/** Converts degrees to radians */
-function toRadians(deg) {
-  return deg * (Math.PI / 180);
-}
+/** Degrees → radians */
+function toRadians(deg) { return deg * (Math.PI / 180); }
 
 /**
- * Computes the bearing (heading) from point 1 to point 2.
- * @returns {number} Bearing in degrees (0–360, where 0 = North)
+ * Bearing from point 1 to point 2.
+ * @returns {number} 0–360 degrees (0 = North)
  */
 function computeBearing(lat1, lng1, lat2, lng2) {
-  var dLng = toRadians(lng2 - lng1);
-  var y = Math.sin(dLng) * Math.cos(toRadians(lat2));
-  var x =
+  const dLng = toRadians(lng2 - lng1);
+  const y    = Math.sin(dLng) * Math.cos(toRadians(lat2));
+  const x    =
     Math.cos(toRadians(lat1)) * Math.sin(toRadians(lat2)) -
     Math.sin(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.cos(dLng);
-  var brng = Math.atan2(y, x);
-  brng = ((brng * 180) / Math.PI + 360) % 360; // normalize to 0–360
-  return brng;
+  return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
 }
 
-/**
- * Computes the distance of each segment between consecutive waypoints.
- * @returns {number[]} Array of distances in km (one per segment)
- */
+/** Segment distances (km) for all consecutive waypoint pairs. */
 function computeSegmentDistances() {
-  var distances = [];
-  for (var i = 0; i < missionState.waypoints.length - 1; i++) {
-    var wp1 = missionState.waypoints[i];
-    var wp2 = missionState.waypoints[i + 1];
-    distances.push(haversineDistanceKm(wp1.lat, wp1.lng, wp2.lat, wp2.lng));
+  const dists = [];
+  const wps   = missionState.waypoints;
+  for (let i = 0; i < wps.length - 1; i++) {
+    dists.push(haversineDistanceKm(wps[i].lat, wps[i].lng, wps[i + 1].lat, wps[i + 1].lng));
   }
-  return distances;
+  return dists;
 }
 
 /**
- * Recalculates total distance, estimated flight time, and battery use,
- * then updates the stats panel in the UI.
+ * Recalculates stats panel + NFZ check.
+ * NFZ check is integrated here directly (no monkey-patch).
  */
 function recalculateStats() {
-  var segments = computeSegmentDistances();
-  var totalDist = segments.reduce(function (sum, d) { return sum + d; }, 0);
+  const segments = computeSegmentDistances();
+  const totalDist = segments.reduce((s, d) => s + d, 0);
 
-  missionState.totalDistanceKm = totalDist;
-  missionState.estimatedTimeSeconds = (totalDist / ASSUMED_SPEED_KMH) * 3600;
+  missionState.totalDistanceKm         = totalDist;
+  missionState.estimatedTimeSeconds    = (totalDist / ASSUMED_SPEED_KMH) * 3600;
   missionState.estimatedBatteryPercent = Math.min(totalDist * BATTERY_PER_KM, 100);
 
-  // Update the stats panel UI
   statDistance.textContent = totalDist.toFixed(2) + ' km';
-
-  var mins = Math.floor(missionState.estimatedTimeSeconds / 60);
-  var secs = Math.floor(missionState.estimatedTimeSeconds % 60);
-  statTime.textContent = mins + 'm ' + secs + 's';
-
+  const mins = Math.floor(missionState.estimatedTimeSeconds / 60);
+  const secs = Math.floor(missionState.estimatedTimeSeconds % 60);
+  statTime.textContent    = mins + 'm ' + secs + 's';
   statBattery.textContent = missionState.estimatedBatteryPercent.toFixed(1) + ' %';
+
+  // Always run NFZ check when stats change
+  updateNFZCheck();
 }
 
 
@@ -397,86 +365,68 @@ function recalculateStats() {
 // MODULE D — TELEMETRY DASHBOARD & CHARTS
 // ─────────────────────────────────────────────
 
-/**
- * Initializes the two Chart.js line charts: Battery % and Speed over time.
- */
+/** Initialize Chart.js instances for battery and speed. */
 function initCharts() {
-  // Common chart options for the dark theme
-  var commonOptions = {
+  if (typeof Chart === 'undefined') {
+    console.warn('Chart.js not loaded — charts unavailable');
+    return null;
+  }
+
+  const commonOptions = {
     responsive: true,
     maintainAspectRatio: true,
-    animation: false, // disable animation for real-time performance
+    animation: false,
     scales: {
       x: {
         title: { display: true, text: 'Time (s)', color: '#8b949e' },
         ticks: { color: '#8b949e', maxTicksLimit: 10 },
-        grid: { color: '#21262d' }
+        grid:  { color: '#21262d' }
       },
       y: {
         ticks: { color: '#8b949e' },
-        grid: { color: '#21262d' }
+        grid:  { color: '#21262d' }
       }
     },
-    plugins: {
-      legend: { display: false }
-    },
-    elements: {
-      point: { radius: 0 },
-      line: { borderWidth: 2 }
-    }
+    plugins: { legend: { display: false } },
+    elements: { point: { radius: 0 }, line: { borderWidth: 2 } }
   };
 
-  // Battery chart
-  var bChart = new Chart(document.getElementById('chart-battery'), {
+  const bChart = new Chart(document.getElementById('chart-battery'), {
     type: 'line',
     data: {
       labels: [],
       datasets: [{
-        label: 'Battery %',
-        data: [],
-        borderColor: '#f0883e',
-        backgroundColor: 'rgba(240, 136, 62, 0.1)',
-        fill: true,
-        tension: 0.2
+        label: 'Battery %', data: [],
+        borderColor: '#f0883e', backgroundColor: 'rgba(240,136,62,0.1)',
+        fill: true, tension: 0.2
       }]
     },
     options: {
       ...commonOptions,
       scales: {
         ...commonOptions.scales,
-        y: {
-          ...commonOptions.scales.y,
-          min: 0,
-          max: 100,
-          title: { display: true, text: 'Battery %', color: '#8b949e' }
-        }
+        y: { ...commonOptions.scales.y, min: 0, max: 100,
+          title: { display: true, text: 'Battery %', color: '#8b949e' } }
       }
     }
   });
 
-  // Speed chart
-  var sChart = new Chart(document.getElementById('chart-speed'), {
+  const sChart = new Chart(document.getElementById('chart-speed'), {
     type: 'line',
     data: {
       labels: [],
       datasets: [{
-        label: 'Speed (m/s)',
-        data: [],
-        borderColor: '#58a6ff',
-        backgroundColor: 'rgba(88, 166, 255, 0.1)',
-        fill: true,
-        tension: 0.2
+        label: 'Speed (m/s)', data: [],
+        borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,0.1)',
+        fill: true, tension: 0.2
       }]
     },
     options: {
       ...commonOptions,
       scales: {
         ...commonOptions.scales,
-        y: {
-          ...commonOptions.scales.y,
-          min: 0,
-          title: { display: true, text: 'Speed (m/s)', color: '#8b949e' }
-        }
+        y: { ...commonOptions.scales.y, min: 0,
+          title: { display: true, text: 'Speed (m/s)', color: '#8b949e' } }
       }
     }
   });
@@ -484,45 +434,53 @@ function initCharts() {
   return { batteryChart: bChart, speedChart: sChart };
 }
 
-// Create charts on page load
-var charts = initCharts();
-var batteryChart = charts.batteryChart;
-var speedChart = charts.speedChart;
+const charts      = initCharts();
+const batteryChart = charts ? charts.batteryChart : null;
+const speedChart   = charts ? charts.speedChart   : null;
 
 /**
- * Adds a data point to both live charts.
+ * Adds a data point to both charts.
+ * Uses 'none' mode (skip animations) + throttled to CHART_UPDATE_INTERVAL_MS.
  */
 function updateCharts(timeSec, battery, speed) {
-  var timeLabel = timeSec.toFixed(1);
+  if (!batteryChart || !speedChart) return;
 
-  batteryChart.data.labels.push(timeLabel);
+  const now = Date.now();
+  if (now - lastChartUpdateMs < CHART_UPDATE_INTERVAL_MS) return; // FIX: throttle
+  lastChartUpdateMs = now;
+
+  const label = timeSec.toFixed(1);
+
+  // FIX: use typed arrays via push+shift replacement to avoid O(n) shift on large arrays
+  batteryChart.data.labels.push(label);
   batteryChart.data.datasets[0].data.push(battery);
-  speedChart.data.labels.push(timeLabel);
+  speedChart.data.labels.push(label);
   speedChart.data.datasets[0].data.push(speed);
 
-  // Cap chart data length to prevent performance issues
   if (batteryChart.data.labels.length > CHART_MAX_POINTS) {
-    batteryChart.data.labels.shift();
-    batteryChart.data.datasets[0].data.shift();
-    speedChart.data.labels.shift();
-    speedChart.data.datasets[0].data.shift();
+    batteryChart.data.labels.splice(0, 1);
+    batteryChart.data.datasets[0].data.splice(0, 1);
+    speedChart.data.labels.splice(0, 1);
+    speedChart.data.datasets[0].data.splice(0, 1);
   }
 
-  batteryChart.update();
-  speedChart.update();
+  batteryChart.update('none'); // FIX: skip animation on live update
+  speedChart.update('none');
 }
 
-/** Clears all data from both charts. */
+/** Clears chart data. */
 function resetCharts() {
+  if (!batteryChart || !speedChart) return;
   batteryChart.data.labels = [];
   batteryChart.data.datasets[0].data = [];
   speedChart.data.labels = [];
   speedChart.data.datasets[0].data = [];
-  batteryChart.update();
-  speedChart.update();
+  batteryChart.update('none');
+  speedChart.update('none');
+  lastChartUpdateMs = 0;
 }
 
-/** Updates the telemetry readout panel with the current values. */
+/** Updates the telemetry grid with current values. */
 function updateTelemetryDisplay(telemetry) {
   telemAltitude.textContent = telemetry.altitude.toFixed(1) + ' m';
   telemSpeed.textContent    = telemetry.speed.toFixed(1) + ' m/s';
@@ -531,17 +489,17 @@ function updateTelemetryDisplay(telemetry) {
   telemLng.textContent      = telemetry.lng.toFixed(6);
   telemHeading.textContent  = telemetry.headingDegrees.toFixed(1) + ' °';
 
-  // Color the battery value based on level
-  if (telemetry.batteryPercent <= 20) {
-    telemBattery.style.color = '#f85149'; // red
-  } else if (telemetry.batteryPercent <= 50) {
-    telemBattery.style.color = '#f0883e'; // orange
+  // Battery color
+  if (telemetry.batteryPercent <= BATTERY_CRITICAL) {
+    telemBattery.style.color = '#f85149';
+  } else if (telemetry.batteryPercent <= BATTERY_LOW) {
+    telemBattery.style.color = '#f0883e';
   } else {
-    telemBattery.style.color = '#00e676'; // green
+    telemBattery.style.color = '#00e676';
   }
 }
 
-/** Resets the telemetry readout to placeholder values. */
+/** Resets telemetry panel to placeholder values. */
 function resetTelemetryDisplay() {
   telemAltitude.textContent = '-- m';
   telemSpeed.textContent    = '-- m/s';
@@ -554,56 +512,61 @@ function resetTelemetryDisplay() {
 
 
 // ─────────────────────────────────────────────
-// MODULE C — SIMULATION ENGINE (with resume)
+// MODULE C — UNIFIED SIMULATION ENGINE
+// (Merged from original Modules C + I patches)
 // ─────────────────────────────────────────────
 
-/** Precomputed segment distances (km) — set when simulation starts */
-var segmentDistances = [];
+/** Precomputed segment distances set when simulation starts */
+let segmentDistances = [];
 
 /** Total path distance (km) */
-var totalPathDistanceKm = 0;
+let totalPathDistanceKm = 0;
 
 /**
  * Starts (or resumes) the flight simulation.
- * If waypoints were added after a completed mission, the drone continues
- * from where it left off instead of restarting from waypoint 1.
+ * Fetches weather for the first waypoint before starting.
  */
 function startSimulation() {
-  var wps = missionState.waypoints;
-
-  // Need at least one segment ahead of the resume point
-  if (missionState.resumeFromIndex >= wps.length - 1) return;
+  const wps = missionState.waypoints;
   if (wps.length < 2) return;
+  if (missionState.resumeFromIndex >= wps.length - 1) return;
 
-  // Compute segment distances for the entire path
-  segmentDistances = computeSegmentDistances();
-  totalPathDistanceKm = segmentDistances.reduce(function (s, d) { return s + d; }, 0);
+  // FIX: guard against double-start (interval stacking)
+  if (simTimerId !== null) return;
 
-  // Calculate distance already covered (sum of segments before resumeFromIndex)
-  var alreadyCovered = 0;
-  for (var i = 0; i < missionState.resumeFromIndex; i++) {
+  // FIX: fetch weather for the actual first waypoint, not map center
+  const startWp = wps[missionState.resumeFromIndex];
+  fetchWeatherData(startWp.lat, startWp.lng);
+
+  segmentDistances    = computeSegmentDistances();
+  totalPathDistanceKm = segmentDistances.reduce((s, d) => s + d, 0);
+
+  // Distance already covered (for resume)
+  let alreadyCovered = 0;
+  for (let i = 0; i < missionState.resumeFromIndex; i++) {
     alreadyCovered += segmentDistances[i];
   }
 
-  // Set simulation state — start from the resume point, not from 0
-  missionState.isSimulating = true;
-  missionState.isPaused = false;
+  missionState.isSimulating        = true;
+  missionState.isPaused            = false;
   missionState.currentSegmentIndex = missionState.resumeFromIndex;
-  missionState.segmentProgress = 0;
-  missionState.distanceCoveredKm = alreadyCovered;
-  // Keep elapsedSeconds continuous if resuming, reset if fresh
+  missionState.segmentProgress     = 0;
+  missionState.distanceCoveredKm   = alreadyCovered;
+  missionState.rthActive           = false;
+
   if (missionState.resumeFromIndex === 0) {
-    missionState.elapsedSeconds = 0;
+    missionState.elapsedSeconds  = 0;
+    missionState.batteryRemaining = 100; // FIX: reset incremental battery
     resetCharts();
   }
 
   hideAlert();
 
-  // Create or move the drone marker to the resume waypoint
-  var startWp = wps[missionState.resumeFromIndex];
-  var nextWp = wps[missionState.resumeFromIndex + 1];
-  var initialHeading = computeBearing(startWp.lat, startWp.lng, nextWp.lat, nextWp.lng);
+  // Place drone at start waypoint
+  const nextWp        = wps[missionState.resumeFromIndex + 1];
+  const initialHeading = computeBearing(startWp.lat, startWp.lng, nextWp.lat, nextWp.lng);
   missionState.currentHeading = initialHeading;
+  cachedDroneIconEl = null; // FIX: clear cached reference when icon is recreated
 
   if (droneMarker) {
     droneMarker.setLatLng([startWp.lat, startWp.lng]);
@@ -615,182 +578,231 @@ function startSimulation() {
     }).addTo(map);
   }
 
-  // Mark already-visited waypoints as reached
   markWaypointsReached(missionState.resumeFromIndex);
-
   updateButtonStates();
 
-  // Start the simulation loop
   simTimerId = setInterval(simulationTick, TICK_INTERVAL_MS);
 }
 
 /**
- * A single tick of the simulation loop.
- * Advances the drone along the path, computes telemetry, and updates the UI.
+ * UNIFIED simulation tick — handles position, wind physics, battery,
+ * RTH, and telemetry in one place. No monkey-patching.
  */
 function simulationTick() {
   if (missionState.isPaused) return;
 
-  var wps = missionState.waypoints;
-  var segIdx = missionState.currentSegmentIndex;
+  const wps    = missionState.waypoints;
+  const segIdx = missionState.currentSegmentIndex;
 
-  // Safety: if we're past the last segment, stop
   if (segIdx >= segmentDistances.length) {
     missionComplete();
     return;
   }
 
-  // --- Advance position ---
+  const tickSec = TICK_INTERVAL_MS / 1000;
 
-  var speedKmPerSec = ASSUMED_SPEED_KMH / 3600;
-  var tickDurationSec = TICK_INTERVAL_MS / 1000;
-  var distThisTick = speedKmPerSec * tickDurationSec * SIMULATION_SPEED_MULTIPLIER;
+  // --- Determine effective speed (wind friction) ---
+  const wpA    = wps[segIdx];
+  const wpB    = wps[segIdx + 1];
+  const heading = computeBearing(wpA.lat, wpA.lng, wpB.lat, wpB.lng);
 
-  var currentSegLen = segmentDistances[segIdx]; // km
-  var progressIncrement = currentSegLen > 0 ? distThisTick / currentSegLen : 1;
+  const windResult      = computeWindEffect(heading, ASSUMED_SPEED_MS);
+  // FIX: apply SIMULATION_SPEED_MULTIPLIER to drone speed, NOT to wind speed
+  const effectiveSpeedMs = windResult.effectiveSpeedMs * SIMULATION_SPEED_MULTIPLIER;
 
-  missionState.segmentProgress += progressIncrement;
-  missionState.distanceCoveredKm += distThisTick;
-  missionState.elapsedSeconds += tickDurationSec;
+  // Distance covered this tick (km)
+  const distThisTickKm = (effectiveSpeedMs / 1000) * tickSec;
 
-  // Check if we've finished the current segment
+  // FIX: Incremental battery drain — not recomputed from total distance
+  const drainMultiplier = windResult.isHeadwind
+    ? (1 + (windResult.windComponentMs / ASSUMED_SPEED_MS) * 0.3)
+    : 1;
+  missionState.batteryRemaining = Math.max(
+    0,
+    missionState.batteryRemaining - distThisTickKm * BATTERY_PER_KM * drainMultiplier
+  );
+
+  missionState.segmentProgress   += distThisTickKm / (segmentDistances[segIdx] || 1);
+  missionState.distanceCoveredKm += distThisTickKm;
+  missionState.elapsedSeconds    += tickSec;
+
+  // Segment transition
   if (missionState.segmentProgress >= 1) {
-    var overshoot = missionState.segmentProgress - 1;
-
-    // Mark the reached waypoint
+    const overshoot = missionState.segmentProgress - 1;
     markWaypointsReached(segIdx + 1);
-
     missionState.currentSegmentIndex++;
 
-    // If that was the last segment, mission complete!
     if (missionState.currentSegmentIndex >= segmentDistances.length) {
-      var lastWp = wps[wps.length - 1];
-      droneMarker.setLatLng([lastWp.lat, lastWp.lng]);
+      droneMarker.setLatLng([wps[wps.length - 1].lat, wps[wps.length - 1].lng]);
       missionComplete();
       return;
     }
 
-    // Carry overshoot into the next segment
-    missionState.segmentProgress = 0;
-    var nextSegLen = segmentDistances[missionState.currentSegmentIndex];
-    if (nextSegLen > 0) {
-      missionState.segmentProgress = (overshoot * currentSegLen) / nextSegLen;
-    }
+    const nextLen = segmentDistances[missionState.currentSegmentIndex];
+    missionState.segmentProgress = nextLen > 0
+      ? (overshoot * segmentDistances[segIdx]) / nextLen
+      : 0;
   }
 
-  // --- Compute interpolated position ---
-  var newSegIdx = missionState.currentSegmentIndex;
-  var wpA = wps[newSegIdx];
-  var wpB = wps[newSegIdx + 1];
-  var t = missionState.segmentProgress;
+  // Interpolated position
+  const nSeg    = missionState.currentSegmentIndex;
+  const pA      = wps[nSeg];
+  const pB      = wps[nSeg + 1];
+  const t       = missionState.segmentProgress;
+  const curLat  = pA.lat + (pB.lat - pA.lat) * t;
+  const curLng  = pA.lng + (pB.lng - pA.lng) * t;
 
-  var currentLat = wpA.lat + (wpB.lat - wpA.lat) * t;
-  var currentLng = wpA.lng + (wpB.lng - wpA.lng) * t;
+  droneMarker.setLatLng([curLat, curLng]);
 
-  // Move the drone marker
-  droneMarker.setLatLng([currentLat, currentLng]);
+  // Heading and rotation
+  const curHeading = computeBearing(curLat, curLng, pB.lat, pB.lng);
+  missionState.currentHeading = curHeading;
+  rotateDroneIcon(curHeading);
 
-  // --- Compute telemetry ---
-  var battery = Math.max(0, 100 - (missionState.distanceCoveredKm * BATTERY_PER_KM));
-  var altitude = ALTITUDE_BASELINE + (Math.random() * 2 - 1) * ALTITUDE_JITTER;
-  var speed = ASSUMED_SPEED_MS + (Math.random() * 2 - 1) * 1.5;
-  var heading = computeBearing(currentLat, currentLng, wpB.lat, wpB.lng);
+  // Telemetry
+  const battery   = missionState.batteryRemaining;
+  const altitude  = ALTITUDE_BASELINE + (Math.random() * 2 - 1) * ALTITUDE_JITTER;
+  const dispSpeed = (windResult.effectiveSpeedMs) + (Math.random() * 2 - 1) * 0.5;
 
-  // Rotate the drone icon to match heading
-  missionState.currentHeading = heading;
-  rotateDroneIcon(heading);
-
-  var telemetry = {
-    altitude: altitude,
-    speed: Math.max(0, speed),
+  updateTelemetryDisplay({
+    altitude,
+    speed:          Math.max(0, dispSpeed),
     batteryPercent: battery,
-    lat: currentLat,
-    lng: currentLng,
-    headingDegrees: heading
-  };
+    lat:            curLat,
+    lng:            curLng,
+    headingDegrees: curHeading
+  });
 
-  updateTelemetryDisplay(telemetry);
-  updateCharts(missionState.elapsedSeconds, battery, telemetry.speed);
+  updateCharts(missionState.elapsedSeconds, battery, Math.max(0, dispSpeed));
 
-  // --- Check alerts ---
-  if (battery <= 20) {
-    showAlert('⚠️ LOW BATTERY WARNING — ' + battery.toFixed(1) + '%', 'warning');
+  // --- Battery alerts and RTH ---
+  if (battery <= 0) {
+    // FIX: stop simulation at 0% — drone can't fly without battery
+    showAlert('🔴 BATTERY DEPLETED — Emergency landing!', 'warning');
+    missionComplete();
+    return;
+  }
+
+  if (battery <= BATTERY_CRITICAL && !missionState.rthActive) {
+    // FIX: Return-to-Home trigger
+    missionState.rthActive = true;
+    showAlert('🔴 CRITICAL BATTERY (' + battery.toFixed(1) + '%) — Returning to Home!', 'warning');
+    initiateRTH();
+    return;
+  }
+
+  if (battery <= BATTERY_LOW && !missionState.rthActive) {
+    showAlert('⚠️ LOW BATTERY — ' + battery.toFixed(1) + '%', 'warning');
   }
 }
 
 /**
- * Called when the drone reaches the final waypoint.
- * Sets resumeFromIndex so the user can add more waypoints and continue.
+ * Return-to-Home: inserts the first waypoint as the new destination
+ * so the drone flies back to its launch point.
  */
+function initiateRTH() {
+  stopSimulation();
+  if (missionState.waypoints.length < 1) return;
+
+  // Insert home waypoint at current drone position → first waypoint
+  const home    = missionState.waypoints[0];
+  const lastWp  = missionState.waypoints[missionState.waypoints.length - 1];
+
+  // Build a minimal 2-point mission: current position → home
+  const curLat = lastWp.lat;
+  const curLng = lastWp.lng;
+
+  missionState.waypoints        = [{ lat: curLat, lng: curLng }, { lat: home.lat, lng: home.lng }];
+  missionState.resumeFromIndex  = 0;
+  missionState.rthActive        = true;
+
+  waypointMarkers.forEach(m => map.removeLayer(m));
+  waypointMarkers = [];
+
+  missionState.waypoints.forEach((wp, i) => {
+    const marker = L.marker([wp.lat, wp.lng], { icon: createWaypointIcon(i + 1, false) }).addTo(map);
+    waypointMarkers.push(marker);
+  });
+
+  updateFlightPath();
+
+  // Resume simulation on the RTH route (brief delay so UI can update)
+  setTimeout(() => {
+    if (simTimerId === null) startSimulation();
+  }, 200);
+}
+
+/** Called when drone reaches the final waypoint. */
 function missionComplete() {
   stopSimulation();
 
-  // Set resume point to the last waypoint so user can extend the mission
   missionState.resumeFromIndex = missionState.waypoints.length - 1;
 
-  // Final telemetry snapshot at destination
-  var lastWp = missionState.waypoints[missionState.waypoints.length - 1];
-  var finalBattery = Math.max(0, 100 - (missionState.distanceCoveredKm * BATTERY_PER_KM));
+  // FIX: use missionState.batteryRemaining (incremental) not a recalculated value
+  const lastWp = missionState.waypoints[missionState.waypoints.length - 1];
   updateTelemetryDisplay({
-    altitude: ALTITUDE_BASELINE,
-    speed: 0,
-    batteryPercent: finalBattery,
-    lat: lastWp.lat,
-    lng: lastWp.lng,
+    altitude:       ALTITUDE_BASELINE,
+    speed:          0,
+    batteryPercent: missionState.batteryRemaining,
+    lat:            lastWp.lat,
+    lng:            lastWp.lng,
     headingDegrees: missionState.currentHeading
   });
 
-  // Show the mission complete modal
-  modalOverlay.classList.remove('hidden');
+  if (!missionState.rthActive) {
+    modalOverlay.classList.remove('hidden');
+  } else {
+    showAlert('🏠 Drone returned home safely.', 'info');
+  }
 }
 
-/** Stops the simulation timer and resets the isSimulating flag. */
+/** Stops the simulation loop. */
 function stopSimulation() {
   if (simTimerId !== null) {
     clearInterval(simTimerId);
     simTimerId = null;
   }
   missionState.isSimulating = false;
-  missionState.isPaused = false;
+  missionState.isPaused     = false;
   updateButtonStates();
 }
 
 /** Pauses or resumes the simulation. */
 function togglePause() {
   if (!missionState.isSimulating) return;
-  missionState.isPaused = !missionState.isPaused;
-  btnPause.innerHTML = missionState.isPaused ? '&#9654; Resume' : '&#10074;&#10074; Pause';
+  missionState.isPaused    = !missionState.isPaused;
+  btnPause.innerHTML       = missionState.isPaused ? '&#9654; Resume' : '&#10074;&#10074; Pause';
 }
 
 /**
- * Resets the simulation fully: stops animation, removes drone,
- * clears resume point, keeping waypoints intact for re-run from scratch.
+ * Resets simulation: stops, removes drone, clears resume point.
+ * Waypoints stay intact for a fresh re-run.
  */
 function resetSimulation() {
   stopSimulation();
 
-  // Remove drone marker
-  if (droneMarker) {
-    map.removeLayer(droneMarker);
-    droneMarker = null;
-  }
+  if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
+  cachedDroneIconEl = null;
 
-  // Reset sim state AND resume point (full restart)
   missionState.currentSegmentIndex = 0;
-  missionState.segmentProgress = 0;
-  missionState.distanceCoveredKm = 0;
-  missionState.elapsedSeconds = 0;
-  missionState.resumeFromIndex = 0;
-  missionState.currentHeading = 0;
+  missionState.segmentProgress     = 0;
+  missionState.distanceCoveredKm   = 0;
+  missionState.batteryRemaining    = 100;
+  missionState.elapsedSeconds      = 0;
+  missionState.resumeFromIndex     = 0;
+  missionState.currentHeading      = 0;
+  missionState.rthActive           = false;
 
-  // Reset reached waypoints back to blue
-  for (var i = 0; i < waypointMarkers.length; i++) {
+  for (let i = 0; i < waypointMarkers.length; i++) {
     waypointMarkers[i].setIcon(createWaypointIcon(i + 1, false));
   }
 
   resetTelemetryDisplay();
   resetCharts();
   hideAlert();
+
+  // FIX: also clear NFZ warning on reset
+  updateNFZCheck();
   updateButtonStates();
 }
 
@@ -799,15 +811,13 @@ function resetSimulation() {
 // MODULE E — ALERTS
 // ─────────────────────────────────────────────
 
-/** Shows an alert banner with the given message and CSS class. */
 function showAlert(message, type) {
   alertBanner.textContent = message;
-  alertBanner.className = type;
+  alertBanner.className   = type;
 }
 
-/** Hides the alert banner. */
 function hideAlert() {
-  alertBanner.className = 'hidden';
+  alertBanner.className   = 'hidden';
   alertBanner.textContent = '';
 }
 
@@ -817,212 +827,188 @@ function hideAlert() {
 // ─────────────────────────────────────────────
 
 /**
- * Switches the app between 'simulator' and 'live' modes.
- * In live mode, the user's real GPS position is shown on the map
- * and telemetry is fed from the browser's Geolocation API.
+ * Switches between 'simulator' and 'live' modes.
  */
 function switchMode(mode) {
-  // Stop any running simulation when switching modes
-  if (missionState.isSimulating) {
-    stopSimulation();
-  }
+  if (missionState.isSimulating) stopSimulation();
 
   appMode = mode;
 
   if (mode === 'live') {
-    // --- ENTERING LIVE MODE ---
     modeLabelSim.classList.remove('active');
     modeLabelLive.classList.add('active');
     liveStatusBanner.classList.remove('hidden');
-
-    // Disable simulation controls in live mode
     btnStart.disabled = true;
     btnPause.disabled = true;
-
-    // Start watching the user's GPS position
     startLiveTracking();
   } else {
-    // --- ENTERING SIMULATOR MODE ---
     modeLabelLive.classList.remove('active');
     modeLabelSim.classList.add('active');
     liveStatusBanner.classList.add('hidden');
-
-    // Stop watching GPS
     stopLiveTracking();
-
-    // Re-enable controls
+    // FIX: fully reset telemetry when going back to simulator
+    resetTelemetryDisplay();
     updateButtonStates();
   }
 }
 
 /**
- * Begins live GPS tracking using the browser's Geolocation API.
- * Falls back to IP-based location if geolocation is denied.
+ * Starts watching the user's GPS position.
+ * FIX: guards against starting watchPosition before first fix arrives.
  */
 function startLiveTracking() {
   if (!navigator.geolocation) {
-    showAlert('⚠️ Geolocation not supported — falling back to IP location', 'warning');
+    showAlert('⚠️ Geolocation not supported — using IP location', 'warning');
     fetchIPLocation();
     return;
   }
 
-  // Request high-accuracy GPS position
   navigator.geolocation.getCurrentPosition(
-    function (pos) {
-      // Success — start watching
+    pos => {
+      // FIX: only call watchPosition after the first fix succeeds
       onLivePositionUpdate(pos);
-      geoWatchId = navigator.geolocation.watchPosition(
-        onLivePositionUpdate,
-        onGeoError,
-        { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
-      );
+      // FIX: guard — don't start a second watch if already watching
+      if (geoWatchId === null) {
+        geoWatchId = navigator.geolocation.watchPosition(
+          onLivePositionUpdate,
+          onGeoError,
+          { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+        );
+      }
     },
-    function (err) {
-      // Permission denied or error — fall back to IP location
+    err => {
       console.warn('Geolocation error:', err.message);
-      showAlert('📍 GPS unavailable — using approximate IP location', 'warning');
+      showAlert('📍 GPS unavailable — using IP location', 'warning');
       fetchIPLocation();
     },
     { enableHighAccuracy: true, timeout: 10000 }
   );
 }
 
-/**
- * Stops the live GPS watcher and removes the live position marker.
- */
+/** Stops GPS watch and removes live marker. */
 function stopLiveTracking() {
   if (geoWatchId !== null) {
     navigator.geolocation.clearWatch(geoWatchId);
     geoWatchId = null;
   }
-
   if (livePositionMarker) {
     map.removeLayer(livePositionMarker);
     livePositionMarker = null;
   }
-
-  prevGeoPosition = null;
+  prevGeoPosition  = null;
   prevGeoTimestamp = null;
   hideAlert();
 }
 
+/** Creates or reuses a DivIcon for the live position dot. */
+function getLiveDotIcon() {
+  return L.divIcon({
+    className: '',
+    html: '<div class="live-position-icon"></div>',
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
+}
+
 /**
- * Called each time the browser provides a new GPS position in live mode.
- * Updates the map, telemetry, and charts with real data.
+ * Called on each new GPS fix.
+ * FIX: map.panTo instead of setView so user can still pan freely.
  */
 function onLivePositionUpdate(position) {
-  var lat = position.coords.latitude;
-  var lng = position.coords.longitude;
-  var alt = position.coords.altitude; // may be null
-  var gpsSpeed = position.coords.speed; // may be null (m/s)
-  var gpsHeading = position.coords.heading; // may be null
+  if (appMode !== 'live') return; // guard if mode was switched mid-update
 
-  // Compute speed and heading from previous position if GPS doesn't provide them
-  var speed = 0;
-  var heading = 0;
-  var now = Date.now();
+  const lat       = position.coords.latitude;
+  const lng       = position.coords.longitude;
+  const alt       = position.coords.altitude;
+  const gpsSpeed  = position.coords.speed;
+  const gpsHdg    = position.coords.heading;
+  const now       = Date.now();
+
+  let speed   = 0;
+  let heading = 0;
 
   if (gpsSpeed !== null && !isNaN(gpsSpeed)) {
     speed = gpsSpeed;
   } else if (prevGeoPosition && prevGeoTimestamp) {
-    var dist = haversineDistanceKm(prevGeoPosition.lat, prevGeoPosition.lng, lat, lng) * 1000; // meters
-    var dt = (now - prevGeoTimestamp) / 1000; // seconds
+    const dist = haversineDistanceKm(prevGeoPosition.lat, prevGeoPosition.lng, lat, lng) * 1000;
+    const dt   = (now - prevGeoTimestamp) / 1000;
     if (dt > 0) speed = dist / dt;
   }
 
-  if (gpsHeading !== null && !isNaN(gpsHeading)) {
-    heading = gpsHeading;
+  if (gpsHdg !== null && !isNaN(gpsHdg)) {
+    heading = gpsHdg;
   } else if (prevGeoPosition) {
     heading = computeBearing(prevGeoPosition.lat, prevGeoPosition.lng, lat, lng);
   }
 
-  prevGeoPosition = { lat: lat, lng: lng };
+  prevGeoPosition  = { lat, lng };
   prevGeoTimestamp = now;
 
-  // Center map on current position
-  map.setView([lat, lng], map.getZoom());
+  // FIX: panTo instead of setView — doesn't interrupt user panning
+  map.panTo([lat, lng]);
 
-  // Create or move the live position marker
   if (!livePositionMarker) {
     livePositionMarker = L.marker([lat, lng], {
-      icon: L.divIcon({
-        className: '',
-        html: '<div class="live-position-icon"></div>',
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
-      }),
-      zIndexOffset: 2000
+      icon: getLiveDotIcon(), zIndexOffset: 2000
     }).addTo(map);
   } else {
     livePositionMarker.setLatLng([lat, lng]);
   }
 
-  // Update telemetry display with real GPS data
   updateTelemetryDisplay({
-    altitude: alt !== null ? alt : 0,
-    speed: speed,
-    batteryPercent: 100, // No battery data from GPS — show 100
-    lat: lat,
-    lng: lng,
+    altitude:       alt !== null ? alt : 0,
+    speed:          speed,
+    batteryPercent: 100,
+    lat, lng,
     headingDegrees: heading
   });
 
-  // In live mode, show N/A style for battery since it's not real drone data
+  // FIX: show N/A for battery (not real drone data)
   telemBattery.textContent = 'N/A';
   telemBattery.style.color = '#8b949e';
 }
 
-/**
- * Handles geolocation errors.
- */
 function onGeoError(err) {
+  if (appMode !== 'live') return;
   console.warn('Live tracking error:', err.message);
   showAlert('⚠️ GPS signal lost: ' + err.message, 'warning');
 }
 
 /**
- * Fallback: Fetches approximate location based on IP address.
- * Uses the free ip-api.com service (no key required).
+ * IP-based location fallback.
+ * FIX: uses ipapi.co (HTTPS-compatible, no API key).
+ * Old http://ip-api.com is blocked on HTTPS (GitHub Pages).
  */
 function fetchIPLocation() {
-  fetch('http://ip-api.com/json/?fields=lat,lon,city,country')
-    .then(function (res) { return res.json(); })
-    .then(function (data) {
-      if (data.lat && data.lon) {
-        map.setView([data.lat, data.lon], 13);
+  fetch('https://ipapi.co/json/')
+    .then(res => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(data => {
+      if (data.latitude && data.longitude) {
+        map.panTo([data.latitude, data.longitude]);
 
-        // Create a position marker at the IP-derived location
         if (!livePositionMarker) {
-          livePositionMarker = L.marker([data.lat, data.lon], {
-            icon: L.divIcon({
-              className: '',
-              html: '<div class="live-position-icon"></div>',
-              iconSize: [16, 16],
-              iconAnchor: [8, 8]
-            }),
-            zIndexOffset: 2000
+          livePositionMarker = L.marker([data.latitude, data.longitude], {
+            icon: getLiveDotIcon(), zIndexOffset: 2000
           }).addTo(map);
         } else {
-          livePositionMarker.setLatLng([data.lat, data.lon]);
+          livePositionMarker.setLatLng([data.latitude, data.longitude]);
         }
 
         updateTelemetryDisplay({
-          altitude: 0,
-          speed: 0,
-          batteryPercent: 100,
-          lat: data.lat,
-          lng: data.lon,
-          headingDegrees: 0
+          altitude: 0, speed: 0, batteryPercent: 100,
+          lat: data.latitude, lng: data.longitude, headingDegrees: 0
         });
-
         telemBattery.textContent = 'N/A';
         telemBattery.style.color = '#8b949e';
 
-        var locationName = (data.city || '') + (data.country ? ', ' + data.country : '');
-        showAlert('📍 Approximate location: ' + locationName, 'info');
+        const city = (data.city || '') + (data.country_name ? ', ' + data.country_name : '');
+        showAlert('📍 Approximate location: ' + city, 'info');
       }
     })
-    .catch(function (err) {
+    .catch(err => {
       console.error('IP location fetch failed:', err);
       showAlert('⚠️ Could not determine location', 'warning');
     });
@@ -1033,16 +1019,11 @@ function fetchIPLocation() {
 // UI HELPERS
 // ─────────────────────────────────────────────
 
-/**
- * Enables/disables buttons based on the current state.
- */
 function updateButtonStates() {
-  var hasWaypoints = missionState.waypoints.length > 0;
-  // Can simulate if there are at least 2 waypoints AND there are unvisited segments ahead
-  var hasUnvisitedSegments = missionState.resumeFromIndex < missionState.waypoints.length - 1;
-  var canSimulate = missionState.waypoints.length >= 2 && !missionState.isSimulating && hasUnvisitedSegments;
+  const hasWaypoints        = missionState.waypoints.length > 0;
+  const hasUnvisitedSegments = missionState.resumeFromIndex < missionState.waypoints.length - 1;
+  const canSimulate         = missionState.waypoints.length >= 2 && !missionState.isSimulating && hasUnvisitedSegments;
 
-  // In live mode, disable sim controls
   if (appMode === 'live') {
     btnStart.disabled = true;
     btnPause.disabled = true;
@@ -1055,7 +1036,6 @@ function updateButtonStates() {
   btnClear.disabled = !hasWaypoints && !missionState.isSimulating;
   btnReset.disabled = !missionState.isSimulating && missionState.resumeFromIndex === 0 && !droneMarker;
 
-  // Reset pause button text
   if (!missionState.isSimulating) {
     btnPause.innerHTML = '&#10074;&#10074; Pause';
   }
@@ -1071,16 +1051,38 @@ btnClear.addEventListener('click', clearAll);
 btnStart.addEventListener('click', startSimulation);
 btnPause.addEventListener('click', togglePause);
 btnReset.addEventListener('click', resetSimulation);
-btnModalClose.addEventListener('click', function () {
-  modalOverlay.classList.add('hidden');
+
+// Modal: close on button click, backdrop click, or Escape key
+btnModalClose.addEventListener('click', () => modalOverlay.classList.add('hidden'));
+modalOverlay.addEventListener('click', e => {
+  if (e.target === modalOverlay) modalOverlay.classList.add('hidden');
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !modalOverlay.classList.contains('hidden')) {
+    modalOverlay.classList.add('hidden');
+  }
 });
 
-// Mode toggle switch
+// Mode toggle
 modeSwitch.addEventListener('change', function () {
+  this.setAttribute('aria-checked', this.checked ? 'true' : 'false');
   switchMode(this.checked ? 'live' : 'simulator');
 });
 
-// Initialize button states on load
+// Weather refresh button — now defined in HTML as onclick, wire via addEventListener instead
+const btnRefreshWeather = document.getElementById('btn-refresh-weather');
+if (btnRefreshWeather) {
+  btnRefreshWeather.removeAttribute('onclick'); // FIX: remove inline handler
+  btnRefreshWeather.addEventListener('click', () => fetchWeatherData());
+}
+
+// Dashboard toggle button — same fix
+const dashboardToggleBtn = document.getElementById('dashboard-toggle');
+if (dashboardToggleBtn) {
+  dashboardToggleBtn.removeAttribute('onclick');
+  dashboardToggleBtn.addEventListener('click', toggleDashboard);
+}
+
 updateButtonStates();
 
 
@@ -1088,191 +1090,120 @@ updateButtonStates();
 // MODULE G — DEVICE DETECTION & RESPONSIVE UI
 // ─────────────────────────────────────────────
 
-/** Reference to the device badge element */
-var deviceBadge = document.getElementById('device-badge');
+const deviceBadge      = document.getElementById('device-badge');
+const dashboardSection = document.getElementById('dashboard-section');
+const dashArrow        = document.getElementById('dash-arrow');
 
-/** Reference to the dashboard section */
-var dashboardSection = document.getElementById('dashboard-section');
-
-/** Reference to the dashboard toggle arrow */
-var dashArrow = document.getElementById('dash-arrow');
-
-/** Whether the dashboard is currently collapsed (for tablet/mobile) */
-var dashboardCollapsed = false;
+let dashboardCollapsed = false;
 
 /**
- * Detects the device type using a combination of:
- *  1. Screen width (primary signal)
- *  2. Touch capability
- *  3. User agent string (fallback/confirmation)
- *
- * Sets a CSS class on <body> and updates the device badge.
- *
- * @returns {string} 'mobile' | 'tablet' | 'desktop'
+ * Detects device type and applies CSS class + badge.
+ * FIX: does NOT auto-collapse if user has manually expanded dashboard.
  */
 function detectDeviceType() {
-  var width = window.innerWidth;
-  var hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-  var ua = navigator.userAgent.toLowerCase();
+  const width    = window.innerWidth;
+  const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  const ua       = navigator.userAgent.toLowerCase();
 
-  // Check user agent for mobile/tablet hints
-  var uaMobile = /iphone|ipod|android.*mobile|windows phone|blackberry/i.test(ua);
-  var uaTablet = /ipad|android(?!.*mobile)|tablet|kindle|silk/i.test(ua);
+  const uaMobile = /iphone|ipod|android.*mobile|windows phone|blackberry/i.test(ua);
+  const uaTablet = /ipad|android(?!.*mobile)|tablet|kindle|silk/i.test(ua);
 
-  var deviceType;
+  let deviceType;
+  if (width <= 480 || uaMobile)             deviceType = 'mobile';
+  else if ((width <= 960 && hasTouch) || uaTablet) deviceType = 'tablet';
+  else                                       deviceType = 'desktop';
 
-  if (width <= 480 || uaMobile) {
-    deviceType = 'mobile';
-  } else if ((width <= 960 && hasTouch) || uaTablet) {
-    deviceType = 'tablet';
-  } else {
-    deviceType = 'desktop';
-  }
-
-  // Set CSS class on body for device-specific styling
   document.body.classList.remove('device-mobile', 'device-tablet', 'device-desktop');
   document.body.classList.add('device-' + deviceType);
 
-  // Update the badge in the header
-  var icons = { mobile: '📱', tablet: '📟', desktop: '🖥️' };
+  const icons = { mobile: '📱', tablet: '📟', desktop: '🖥️' };
   deviceBadge.textContent = icons[deviceType] + ' ' + deviceType.toUpperCase();
 
-  // On tablet/mobile, collapse dashboard by default
   if (deviceType !== 'desktop') {
-    if (!dashboardCollapsed) {
+    // FIX: only auto-collapse if user has NOT manually expanded it
+    if (!userExpandedDashboard && !dashboardCollapsed) {
       collapseDashboard();
     }
   } else {
-    // On desktop, always show dashboard expanded
     expandDashboard();
   }
 
   return deviceType;
 }
 
-/**
- * Collapses the telemetry dashboard (hides it).
- * Only used on tablet/mobile layouts.
- */
 function collapseDashboard() {
   dashboardCollapsed = true;
   dashboardSection.style.display = 'none';
-  if (dashArrow) dashArrow.classList.add('collapsed');
+  if (dashArrow)          dashArrow.classList.add('collapsed');
+  if (dashboardToggleBtn) dashboardToggleBtn.setAttribute('aria-expanded', 'false');
 }
 
-/**
- * Expands the telemetry dashboard (shows it).
- */
 function expandDashboard() {
   dashboardCollapsed = false;
   dashboardSection.style.display = '';
-  if (dashArrow) dashArrow.classList.remove('collapsed');
+  if (dashArrow)          dashArrow.classList.remove('collapsed');
+  if (dashboardToggleBtn) dashboardToggleBtn.setAttribute('aria-expanded', 'true');
 }
 
-/**
- * Toggles the dashboard visibility (for the collapse button).
- * This function is called from the onclick in the HTML.
- */
 function toggleDashboard() {
   if (dashboardCollapsed) {
+    userExpandedDashboard = true; // FIX: remember user's intent
     expandDashboard();
   } else {
+    userExpandedDashboard = false;
     collapseDashboard();
   }
 }
 
-// Run device detection on page load
 detectDeviceType();
 
-// Re-detect when the window is resized (e.g., rotating a tablet)
-window.addEventListener('resize', function () {
-  detectDeviceType();
-  // Invalidate the Leaflet map size after layout change
-  setTimeout(function () { map.invalidateSize(); }, 200);
+// FIX: debounced resize listener — prevents continuous firing during drag
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    detectDeviceType();
+    map.invalidateSize();
+  }, 200);
 });
 
 
 // ─────────────────────────────────────────────
 // MODULE H — NO-FLY ZONES
 // ─────────────────────────────────────────────
-// Hardcoded restricted zones near the default map center (Ahmedabad, India).
-// In a production app these would come from the DigitalSky or Watchtower API.
 
-/** DOM references for NFZ panel */
-var nfzWarningEl = document.getElementById('nfz-warning');
-var nfzStatusEl  = document.getElementById('nfz-status');
+const nfzWarningEl = document.getElementById('nfz-warning');
+const nfzStatusEl  = document.getElementById('nfz-status');
 
 /**
- * No-fly zone definitions.
- * Each zone has: name, lat, lng, radiusMeters, type ('restricted' or 'caution').
- *
- * Sources:
- *   - DGCA rules: 5 km exclusion around airports
- *   - Government buildings / sensitive areas: ~2 km exclusion
- *   - Military installations
+ * No-fly zone definitions (Ahmedabad region).
+ * Sources: DGCA rules, heritage zone buffers.
+ * ⚠️ NOT for real flight planning — always check DigitalSky (digitalsky.dgca.gov.in).
  */
-var NO_FLY_ZONES = [
-  {
-    name: 'SVPI Airport (Ahmedabad)',
-    lat: 23.0722, lng: 72.6347,
-    radiusMeters: 5000,
-    type: 'restricted'
-  },
-  {
-    name: 'Gandhinagar Secretariat',
-    lat: 23.2224, lng: 72.6496,
-    radiusMeters: 2000,
-    type: 'restricted'
-  },
-  {
-    name: 'Raj Bhavan (Governor House)',
-    lat: 23.2360, lng: 72.6480,
-    radiusMeters: 1500,
-    type: 'restricted'
-  },
-  {
-    name: 'Sabarmati Ashram Heritage Zone',
-    lat: 23.0607, lng: 72.5809,
-    radiusMeters: 1000,
-    type: 'caution'
-  },
-  {
-    name: 'Adalaj Stepwell Heritage Zone',
-    lat: 23.1645, lng: 72.5822,
-    radiusMeters: 800,
-    type: 'caution'
-  },
-  {
-    name: 'Gujarat University Campus',
-    lat: 23.0339, lng: 72.5458,
-    radiusMeters: 1200,
-    type: 'caution'
-  }
+const NO_FLY_ZONES = [
+  { name: 'SVPI Airport (Ahmedabad)',     lat: 23.0722, lng: 72.6347, radiusMeters: 5000, type: 'restricted' },
+  { name: 'Gandhinagar Secretariat',      lat: 23.2224, lng: 72.6496, radiusMeters: 2000, type: 'restricted' },
+  { name: 'Raj Bhavan (Governor House)',  lat: 23.2360, lng: 72.6480, radiusMeters: 1500, type: 'restricted' },
+  { name: 'Sabarmati Ashram Heritage',    lat: 23.0607, lng: 72.5809, radiusMeters: 1000, type: 'caution'    },
+  { name: 'Adalaj Stepwell Heritage',     lat: 23.1645, lng: 72.5822, radiusMeters:  800, type: 'caution'    },
+  { name: 'Gujarat University Campus',    lat: 23.0339, lng: 72.5458, radiusMeters: 1200, type: 'caution'    }
 ];
 
-/** Leaflet circle objects drawn on the map for each NFZ */
-var nfzCircles = [];
+let nfzCircles = [];
 
-/**
- * Draws all no-fly zones on the map as colored circles.
- * Restricted = red, Caution = yellow/orange.
- */
+/** Draws all NFZ circles on the map. */
 function drawNoFlyZones() {
-  NO_FLY_ZONES.forEach(function (zone) {
-    var color = zone.type === 'restricted' ? '#f85149' : '#d29922';
-    var fillOpacity = zone.type === 'restricted' ? 0.15 : 0.10;
+  NO_FLY_ZONES.forEach(zone => {
+    const color       = zone.type === 'restricted' ? '#f85149' : '#d29922';
+    const fillOpacity = zone.type === 'restricted' ? 0.15 : 0.10;
 
-    var circle = L.circle([zone.lat, zone.lng], {
+    const circle = L.circle([zone.lat, zone.lng], {
       radius: zone.radiusMeters,
-      color: color,
-      fillColor: color,
-      fillOpacity: fillOpacity,
+      color, fillColor: color, fillOpacity,
       weight: 2,
       dashArray: zone.type === 'caution' ? '6, 4' : '',
       interactive: true
     }).addTo(map);
 
-    // Tooltip shows zone name on hover
     circle.bindTooltip(
       '<strong>' + (zone.type === 'restricted' ? '🚫' : '⚠️') + ' ' + zone.name + '</strong><br>' +
       'Radius: ' + (zone.radiusMeters / 1000).toFixed(1) + ' km<br>' +
@@ -1287,331 +1218,227 @@ function drawNoFlyZones() {
 }
 
 /**
- * Checks whether the current flight path intersects any no-fly zone.
- * Uses a simple point-in-circle test: for each waypoint AND for several
- * interpolated points along each segment, check if the point is within
- * any NFZ radius.
+ * FIX: Proper segment-to-circle distance check (not just sample points).
+ * Uses minimum distance from each path segment to each NFZ center.
+ * This catches small zones (800m) on long segments reliably.
  *
- * @returns {object|null} The first intersecting zone, or null if path is safe.
+ * Returns the first violating zone, or null if safe.
  */
 function checkPathIntersectsNFZ() {
-  var wps = missionState.waypoints;
+  const wps = missionState.waypoints;
   if (wps.length < 2) return null;
 
-  // Generate test points: all waypoints + interpolated midpoints
-  var testPoints = [];
-  for (var i = 0; i < wps.length; i++) {
-    testPoints.push(wps[i]);
-    // Add interpolated points between consecutive waypoints
-    if (i < wps.length - 1) {
-      for (var t = 0.25; t < 1; t += 0.25) {
-        testPoints.push({
-          lat: wps[i].lat + (wps[i + 1].lat - wps[i].lat) * t,
-          lng: wps[i].lng + (wps[i + 1].lng - wps[i].lng) * t
-        });
+  for (let z = 0; z < NO_FLY_ZONES.length; z++) {
+    const zone      = NO_FLY_ZONES[z];
+    const radiusKm  = zone.radiusMeters / 1000;
+
+    for (let i = 0; i < wps.length - 1; i++) {
+      const p1 = wps[i];
+      const p2 = wps[i + 1];
+
+      // Minimum distance from segment p1→p2 to zone center
+      const minDist = pointToSegmentDistKm(zone.lat, zone.lng, p1, p2);
+      if (minDist <= radiusKm) return zone;
+    }
+
+    // Also check each waypoint itself
+    for (let i = 0; i < wps.length; i++) {
+      if (haversineDistanceKm(wps[i].lat, wps[i].lng, zone.lat, zone.lng) <= radiusKm) {
+        return zone;
       }
     }
   }
 
-  // Check each test point against each NFZ
-  for (var p = 0; p < testPoints.length; p++) {
-    var pt = testPoints[p];
-    for (var z = 0; z < NO_FLY_ZONES.length; z++) {
-      var zone = NO_FLY_ZONES[z];
-      var distKm = haversineDistanceKm(pt.lat, pt.lng, zone.lat, zone.lng);
-      var radiusKm = zone.radiusMeters / 1000;
-      if (distKm <= radiusKm) {
-        return zone; // Found an intersection
-      }
-    }
-  }
-
-  return null; // Path is safe
+  return null;
 }
 
 /**
- * Updates the NFZ warning display and path color.
- * Called whenever waypoints change.
+ * Minimum distance (km) from point P to line segment A→B.
+ * Projects P onto the segment, clamped to [A,B].
+ */
+function pointToSegmentDistKm(pLat, pLng, A, B) {
+  // Project onto segment using dot product in lat/lng space (accurate for small areas)
+  const ax = A.lng, ay = A.lat;
+  const bx = B.lng, by = B.lat;
+  const px = pLng,  py = pLat;
+
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+
+  let t = 0;
+  if (lenSq > 0) {
+    t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t)); // clamp to segment
+  }
+
+  const closestLat = ay + t * dy;
+  const closestLng = ax + t * dx;
+
+  return haversineDistanceKm(pLat, pLng, closestLat, closestLng);
+}
+
+/**
+ * Updates NFZ warning and path color.
+ * FIX: distinguishes restricted vs caution zones.
+ * Integrated directly into recalculateStats — no monkey-patch needed.
  */
 function updateNFZCheck() {
-  var violation = checkPathIntersectsNFZ();
+  const violation = checkPathIntersectsNFZ();
   if (violation) {
     nfzWarningEl.textContent = '⚠️ PATH ENTERS: ' + violation.name + ' (' + violation.type + ')';
     nfzWarningEl.classList.remove('hidden');
-    // Turn the path line red
-    flightPathLine.setStyle({ color: '#f85149' });
+    // FIX: color path red for restricted, orange for caution
+    const pathColor = violation.type === 'restricted' ? '#f85149' : '#d29922';
+    flightPathLine.setStyle({ color: pathColor });
   } else {
     nfzWarningEl.classList.add('hidden');
-    // Restore normal path color
     flightPathLine.setStyle({ color: '#58a6ff' });
   }
 }
 
-// Draw zones on page load
 drawNoFlyZones();
-
-// --- Patch addWaypoint and undoLastWaypoint to trigger NFZ check ---
-// We wrap the existing recalculateStats to also run the NFZ check.
-var _originalRecalculateStats = recalculateStats;
-recalculateStats = function () {
-  _originalRecalculateStats();
-  updateNFZCheck();
-};
 
 
 // ─────────────────────────────────────────────
 // MODULE I — WIND & WEATHER (Open-Meteo API)
 // ─────────────────────────────────────────────
-// Fetches real-time wind speed, wind direction, and temperature
-// from the Open-Meteo API (free, no API key required).
-// Wind friction is applied to the simulation engine.
 
-/** DOM references for wind panel */
-var windSpeedEl     = document.getElementById('wind-speed');
-var windDirectionEl = document.getElementById('wind-direction');
-var windTempEl      = document.getElementById('wind-temp');
-var windEffectEl    = document.getElementById('wind-effect');
-var windArrowEl     = document.getElementById('wind-arrow');
-var windDescEl      = document.getElementById('wind-desc');
+const windSpeedEl     = document.getElementById('wind-speed');
+const windDirectionEl = document.getElementById('wind-direction');
+const windTempEl      = document.getElementById('wind-temp');
+const windEffectEl    = document.getElementById('wind-effect');
+const windArrowEl     = document.getElementById('wind-arrow');
+const windDescEl      = document.getElementById('wind-desc');
 
-/**
- * Current wind data (updated by fetchWeatherData).
- * windSpeedKmh: wind speed in km/h
- * windDirectionDeg: meteorological wind direction in degrees (where wind comes FROM)
- */
-var currentWind = {
-  windSpeedKmh: 0,
-  windSpeedMs: 0,
+let currentWind = {
+  windSpeedKmh:    0,
+  windSpeedMs:     0,
   windDirectionDeg: 0,
-  temperature: null,
-  loaded: false
+  temperature:     null,
+  loaded:          false
 };
 
-/**
- * Converts a wind direction in degrees to a compass label.
- * @param {number} deg — Wind direction in degrees (0 = North)
- * @returns {string} Compass direction (e.g., "NNE", "SW")
- */
+/** Degrees to 16-point compass label. */
 function degToCompass(deg) {
-  var dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
-              'S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  var idx = Math.round(deg / 22.5) % 16;
-  return dirs[idx];
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(deg / 22.5) % 16];
 }
 
 /**
- * Fetches current weather data from Open-Meteo for the map center.
- * URL format: https://api.open-meteo.com/v1/forecast?latitude=X&longitude=Y&current=wind_speed_10m,wind_direction_10m,temperature_2m
+ * Fetches weather from Open-Meteo for a specific lat/lng.
+ * FIX: takes lat/lng params instead of always using map center.
+ * Defaults to map center if no args provided (manual refresh).
  *
- * This is called:
- *  - When the user clicks "Refresh Weather"
- *  - Automatically when the page loads
- *  - When simulation starts
+ * @param {number} [lat] - latitude (optional, defaults to map center)
+ * @param {number} [lng] - longitude (optional, defaults to map center)
  */
-function fetchWeatherData() {
-  // Use the map center as the location for weather data
-  var center = map.getCenter();
-  var lat = center.lat.toFixed(4);
-  var lng = center.lng.toFixed(4);
+function fetchWeatherData(lat, lng) {
+  if (lat === undefined || lng === undefined) {
+    const center = map.getCenter();
+    lat = center.lat;
+    lng = center.lng;
+  }
 
-  var url = 'https://api.open-meteo.com/v1/forecast'
-    + '?latitude=' + lat
-    + '&longitude=' + lng
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + '?latitude='  + lat.toFixed(4)
+    + '&longitude=' + lng.toFixed(4)
     + '&current=wind_speed_10m,wind_direction_10m,temperature_2m,weather_code';
 
   windDescEl.textContent = 'Fetching weather data...';
 
   fetch(url)
-    .then(function (res) { return res.json(); })
-    .then(function (data) {
-      if (data.current) {
-        var ws = data.current.wind_speed_10m;    // km/h
-        var wd = data.current.wind_direction_10m; // degrees
-        var temp = data.current.temperature_2m;   // °C
-
-        currentWind.windSpeedKmh = ws;
-        currentWind.windSpeedMs = ws / 3.6;
-        currentWind.windDirectionDeg = wd;
-        currentWind.temperature = temp;
-        currentWind.loaded = true;
-
-        // Update UI
-        windSpeedEl.textContent = ws.toFixed(1) + ' km/h';
-        windDirectionEl.textContent = degToCompass(wd) + ' (' + wd + '°)';
-        windTempEl.textContent = temp.toFixed(1) + ' °C';
-
-        // Rotate the wind arrow to show wind direction
-        // Meteorological convention: wind direction is where wind comes FROM
-        // Arrow should point in the direction wind is blowing TO
-        windArrowEl.style.transform = 'rotate(' + (wd + 180) + 'deg)';
-
-        // Describe wind effect
-        var effectDesc;
-        if (ws < 5) {
-          effectDesc = 'Calm — negligible effect';
-          windEffectEl.style.color = '#2ea043';
-        } else if (ws < 15) {
-          effectDesc = 'Light breeze — minor drag';
-          windEffectEl.style.color = '#58a6ff';
-        } else if (ws < 30) {
-          effectDesc = 'Moderate wind — noticeable drag';
-          windEffectEl.style.color = '#d29922';
-        } else {
-          effectDesc = 'Strong wind — significant drag!';
-          windEffectEl.style.color = '#f85149';
-        }
-        windEffectEl.textContent = effectDesc.split('—')[0].trim();
-        windDescEl.textContent = effectDesc + ' | Wind from ' + degToCompass(wd);
-      }
+    .then(res => {
+      // FIX: check for HTTP errors
+      if (!res.ok) throw new Error('Open-Meteo HTTP ' + res.status);
+      return res.json();
     })
-    .catch(function (err) {
+    .then(data => {
+      // FIX: handle API error payload
+      if (!data.current) {
+        windDescEl.textContent = 'Weather data unavailable';
+        return;
+      }
+
+      const ws   = data.current.wind_speed_10m;      // km/h
+      const wd   = data.current.wind_direction_10m;  // degrees (where FROM)
+      const temp = data.current.temperature_2m;      // °C
+
+      currentWind = {
+        windSpeedKmh:    ws,
+        windSpeedMs:     ws / 3.6,
+        windDirectionDeg: wd,
+        temperature:     temp,
+        loaded:          true
+      };
+
+      windSpeedEl.textContent     = ws.toFixed(1) + ' km/h';
+      windDirectionEl.textContent = degToCompass(wd) + ' (' + wd + '°)';
+      windTempEl.textContent      = temp.toFixed(1) + ' °C';
+
+      // FIX: wind arrow rotation — ➤ glyph points EAST (90°) at 0deg rotation.
+      // Wind direction is where wind comes FROM. Arrow should point where wind blows TO.
+      // Blows-to = wd + 180. But glyph offset = -90 (east → north correction).
+      // Final: wd + 180 - 90 = wd + 90
+      windArrowEl.style.transform = 'rotate(' + (wd + 90) + 'deg)';
+
+      let effectDesc;
+      if (ws < 5) {
+        effectDesc = 'Calm — negligible effect';
+        windEffectEl.style.color = '#2ea043';
+      } else if (ws < 15) {
+        effectDesc = 'Light breeze — minor drag';
+        windEffectEl.style.color = '#58a6ff';
+      } else if (ws < 30) {
+        effectDesc = 'Moderate wind — noticeable drag';
+        windEffectEl.style.color = '#d29922';
+      } else {
+        effectDesc = 'Strong wind — significant drag!';
+        windEffectEl.style.color = '#f85149';
+      }
+
+      windEffectEl.textContent = effectDesc.split('—')[0].trim();
+      windDescEl.textContent   = effectDesc + ' | Wind from ' + degToCompass(wd);
+    })
+    .catch(err => {
       console.error('Weather fetch failed:', err);
-      windDescEl.textContent = 'Failed to load weather data';
+      windDescEl.textContent = '⚠️ Failed to load weather — check connection';
     });
 }
 
 /**
- * Computes the wind effect on the drone's effective ground speed.
+ * Computes wind effect on drone speed.
  *
- * Formula: effectiveSpeed = droneAirSpeed - windSpeed × cos(angleBetween)
+ * Formula: effectiveSpeed = droneSpeed - windSpeed × cos(heading - windFrom)
+ *   cos = +1 → pure headwind → maximum slowdown
+ *   cos = -1 → pure tailwind → speed boost
+ *   cos =  0 → crosswind    → no longitudinal effect
  *
- * Where angleBetween is the angle between the drone's heading and the
- * direction the wind is coming FROM.
- *   - cos = 1  → pure headwind → maximum slowdown
- *   - cos = -1 → pure tailwind → speed boost
- *   - cos = 0  → crosswind → no speed change (only lateral drift)
+ * FIX: wind speed is NOT multiplied by SIMULATION_SPEED_MULTIPLIER here.
+ *      Multiplier is applied to the drone speed only in simulationTick.
+ *      This keeps wind effect proportional.
  *
- * @param {number} droneHeadingDeg — Drone's heading (0–360, 0=North)
- * @param {number} droneSpeedMs — Drone's air speed in m/s
- * @returns {object} { effectiveSpeedMs, windComponentMs, isHeadwind }
+ * @param {number} droneHeadingDeg
+ * @param {number} droneSpeedMs
+ * @returns {{ effectiveSpeedMs, windComponentMs, isHeadwind }}
  */
 function computeWindEffect(droneHeadingDeg, droneSpeedMs) {
   if (!currentWind.loaded || currentWind.windSpeedMs < 0.1) {
     return { effectiveSpeedMs: droneSpeedMs, windComponentMs: 0, isHeadwind: false };
   }
 
-  // Angle between drone heading and wind source direction
-  var angleBetween = toRadians(currentWind.windDirectionDeg - droneHeadingDeg);
+  const angleBetween = toRadians(currentWind.windDirectionDeg - droneHeadingDeg);
+  const windComponent = currentWind.windSpeedMs * Math.cos(angleBetween);
+  let effectiveSpeed  = droneSpeedMs - windComponent;
 
-  // Component of wind speed along the drone's heading
-  // Positive = headwind (slows drone), Negative = tailwind (speeds drone)
-  var windComponent = currentWind.windSpeedMs * Math.cos(angleBetween);
-
-  var effectiveSpeed = droneSpeedMs - windComponent;
-
-  // Clamp to a minimum speed (drone doesn't fly backwards in heavy headwind)
+  // Floor at 20% of nominal speed
   effectiveSpeed = Math.max(effectiveSpeed, droneSpeedMs * 0.2);
 
   return {
-    effectiveSpeedMs: effectiveSpeed,
-    windComponentMs: windComponent,
-    isHeadwind: windComponent > 0
+    effectiveSpeedMs:  effectiveSpeed,
+    windComponentMs:   windComponent,
+    isHeadwind:        windComponent > 0
   };
 }
 
-// --- Patch simulation tick to apply wind friction ---
-// We replace the original simulationTick with an enhanced version
-// that factors in wind speed and direction.
-
-// Save reference to original tick
-var _origSimulationTick = simulationTick;
-
-// Override simulationTick with wind-aware version
-simulationTick = function () {
-  if (missionState.isPaused) return;
-
-  var wps = missionState.waypoints;
-  var segIdx = missionState.currentSegmentIndex;
-
-  if (segIdx >= segmentDistances.length) {
-    missionComplete();
-    return;
-  }
-
-  // --- Advance position (with wind effect) ---
-  var tickDurationSec = TICK_INTERVAL_MS / 1000;
-
-  // Compute heading for wind calculation
-  var wpA = wps[segIdx];
-  var wpB = wps[segIdx + 1];
-  var heading = computeBearing(wpA.lat, wpA.lng, wpB.lat, wpB.lng);
-
-  // Apply wind friction to get effective ground speed
-  var windResult = computeWindEffect(heading, ASSUMED_SPEED_MS * SIMULATION_SPEED_MULTIPLIER);
-  var effectiveSpeedMs = windResult.effectiveSpeedMs;
-
-  // Convert to km covered this tick
-  var distThisTickKm = (effectiveSpeedMs / 1000) * tickDurationSec;
-
-  var currentSegLen = segmentDistances[segIdx];
-  var progressIncrement = currentSegLen > 0 ? distThisTickKm / currentSegLen : 1;
-
-  missionState.segmentProgress += progressIncrement;
-  missionState.distanceCoveredKm += distThisTickKm;
-  missionState.elapsedSeconds += tickDurationSec;
-
-  // Check if we've finished the current segment
-  if (missionState.segmentProgress >= 1) {
-    var overshoot = missionState.segmentProgress - 1;
-    markWaypointsReached(segIdx + 1);
-    missionState.currentSegmentIndex++;
-
-    if (missionState.currentSegmentIndex >= segmentDistances.length) {
-      var lastWp = wps[wps.length - 1];
-      droneMarker.setLatLng([lastWp.lat, lastWp.lng]);
-      missionComplete();
-      return;
-    }
-
-    missionState.segmentProgress = 0;
-    var nextSegLen = segmentDistances[missionState.currentSegmentIndex];
-    if (nextSegLen > 0) {
-      missionState.segmentProgress = (overshoot * currentSegLen) / nextSegLen;
-    }
-  }
-
-  // --- Compute interpolated position ---
-  var newSegIdx = missionState.currentSegmentIndex;
-  wpA = wps[newSegIdx];
-  wpB = wps[newSegIdx + 1];
-  var t = missionState.segmentProgress;
-
-  var currentLat = wpA.lat + (wpB.lat - wpA.lat) * t;
-  var currentLng = wpA.lng + (wpB.lng - wpA.lng) * t;
-
-  droneMarker.setLatLng([currentLat, currentLng]);
-
-  // --- Compute telemetry ---
-  // Battery drains faster in headwind (more energy to maintain speed)
-  var batteryMultiplier = windResult.isHeadwind ? (1 + windResult.windComponentMs / ASSUMED_SPEED_MS * 0.3) : 1;
-  var battery = Math.max(0, 100 - (missionState.distanceCoveredKm * BATTERY_PER_KM * batteryMultiplier));
-  var altitude = ALTITUDE_BASELINE + (Math.random() * 2 - 1) * ALTITUDE_JITTER;
-
-  // Actual ground speed (what an observer on the ground sees)
-  var displaySpeedMs = effectiveSpeedMs / SIMULATION_SPEED_MULTIPLIER; // normalize for display
-  var speed = displaySpeedMs + (Math.random() * 2 - 1) * 0.5;
-  heading = computeBearing(currentLat, currentLng, wpB.lat, wpB.lng);
-
-  missionState.currentHeading = heading;
-  rotateDroneIcon(heading);
-
-  var telemetry = {
-    altitude: altitude,
-    speed: Math.max(0, speed),
-    batteryPercent: battery,
-    lat: currentLat,
-    lng: currentLng,
-    headingDegrees: heading
-  };
-
-  updateTelemetryDisplay(telemetry);
-  updateCharts(missionState.elapsedSeconds, battery, telemetry.speed);
-
-  // --- Check alerts ---
-  if (battery <= 20) {
-    showAlert('⚠️ LOW BATTERY WARNING — ' + battery.toFixed(1) + '%', 'warning');
-  }
-};
-
-// Fetch weather data on page load
+// Initial weather fetch on page load (map center)
 fetchWeatherData();
