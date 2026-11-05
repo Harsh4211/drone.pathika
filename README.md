@@ -3,7 +3,6 @@
 > A browser-based drone flight path planner and simulator with live telemetry, real-time weather integration, no-fly zone awareness, and device-adaptive UI — built entirely with vanilla HTML/CSS/JavaScript.
 
 ![Status](https://img.shields.io/badge/Status-Active-00e676?style=flat-square)
-![License](https://img.shields.io/badge/License-MIT-58a6ff?style=flat-square)
 ![No Backend](https://img.shields.io/badge/Backend-None%20Required-d29922?style=flat-square)
 ![API Keys](https://img.shields.io/badge/API%20Keys-Not%20Required-2ea043?style=flat-square)
 
@@ -22,7 +21,6 @@
 - [Screenshots](#screenshots)
 - [Future Advancements](#future-advancements)
 - [Contributing](#contributing)
-- [License](#license)
 
 ---
 
@@ -314,12 +312,6 @@ This is a student project under an Internship, but contributions are welcome!
 3. Commit your changes: `git commit -m "Add my feature"`
 4. Push to the branch: `git push origin feature/my-feature`
 5. Open a Pull Request
-
----
-
-## License
-
-This project is open source and available under the [MIT License](LICENSE).
 
 ---
 
