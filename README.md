@@ -270,7 +270,7 @@ const CHART_UPDATE_INTERVAL_MS    = 500;   // Chart render throttle (ms)
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
 ### Authors
-- **Harsh** — Technical Research, Simulation Engine, MAVLink/WebSocket Architecture & Implementation
+- **Harsh Hindocha** — Technical Research, Simulation Engine, MAVLink/WebSocket Architecture & Implementation
 - **Dikshita Deora** — Physics Research, Aerodynamic Wind Friction Modeling & Airspace Regulations
 
 *Built under BSERC Def-Space Summer Internship 2026.*
